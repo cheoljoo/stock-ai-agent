@@ -1,19 +1,23 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export class StockAppStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // VPC
+    // ==========================================================================
+    // VPC 설정
+    // ==========================================================================
     const vpc = new ec2.Vpc(this, 'StockAppVpc', {
       maxAzs: 2,
       natGateways: 1,
@@ -26,9 +30,7 @@ export class StockAppStack extends cdk.Stack {
       bucketName: `stock-app-logs-${cdk.Aws.ACCOUNT_ID}`,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
-      // ALB 로그를 위한 ACL 설정
       objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_PREFERRED,
-      // 90일 후 로그 자동 삭제
       lifecycleRules: [
         {
           id: 'DeleteOldLogs',
@@ -36,15 +38,12 @@ export class StockAppStack extends cdk.Stack {
           enabled: true,
         },
       ],
-      // 암호화 설정
       encryption: s3.BucketEncryption.S3_MANAGED,
-      // 퍼블릭 액세스 차단
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     });
 
     // ==========================================================================
     // 보안: CloudFront Origin 검증용 비밀 헤더 생성
-    // ALB는 이 헤더가 있는 요청만 허용하여 직접 접근을 차단
     // ==========================================================================
     const originVerifySecret = new secretsmanager.Secret(this, 'OriginVerifySecret', {
       description: 'Secret header value for CloudFront to ALB origin verification',
@@ -54,8 +53,25 @@ export class StockAppStack extends cdk.Stack {
       },
     });
 
-    // Security Group for ALB
-    // CloudFront Managed Prefix List를 사용하여 CloudFront IP만 허용
+    // ==========================================================================
+    // ECR 레포지토리 (기존 레포지토리 참조 또는 생성)
+    // ==========================================================================
+    const ecrRepository = new ecr.Repository(this, 'StockAppRepository', {
+      repositoryName: 'stock-app',
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      imageScanOnPush: true,
+      lifecycleRules: [
+        {
+          maxImageCount: 10,
+          description: 'Keep only 10 images',
+        },
+      ],
+    });
+
+    // ==========================================================================
+    // Security Groups
+    // ==========================================================================
+    // ALB Security Group - CloudFront에서만 접근 허용
     const albSg = new ec2.SecurityGroup(this, 'AlbSecurityGroup', {
       vpc,
       description: 'Security group for ALB - CloudFront only',
@@ -63,111 +79,122 @@ export class StockAppStack extends cdk.Stack {
     });
 
     // CloudFront Managed Prefix List를 통해 CloudFront IP 범위만 허용
-    // 이렇게 하면 ALB에 직접 접근이 불가능해짐
-    const cloudfrontPrefixList = ec2.Peer.prefixList('pl-3b927c52'); // us-east-1 CloudFront prefix list
+    const cloudfrontPrefixList = ec2.Peer.prefixList('pl-3b927c52'); // us-east-1
     albSg.addIngressRule(cloudfrontPrefixList, ec2.Port.tcp(80), 'Allow HTTP from CloudFront only');
 
-    // Security Group for EC2
-    const ec2Sg = new ec2.SecurityGroup(this, 'Ec2SecurityGroup', {
+    // ECS Service Security Group
+    const ecsSg = new ec2.SecurityGroup(this, 'EcsSecurityGroup', {
       vpc,
-      description: 'Security group for EC2',
+      description: 'Security group for ECS Fargate tasks',
       allowAllOutbound: true,
     });
-    ec2Sg.addIngressRule(albSg, ec2.Port.tcp(8501), 'Allow Streamlit from ALB');
+    ecsSg.addIngressRule(albSg, ec2.Port.tcp(8501), 'Allow Streamlit from ALB');
 
-    // S3 bucket name (parameterized)
-    const deployBucket = process.env.DEPLOY_BUCKET || 'stock-ai-agent-deploy-1770486416';
-
-    // IAM Role for EC2
-    const ec2Role = new iam.Role(this, 'Ec2Role', {
-      assumedBy: new iam.ServicePrincipal('ec2.amazonaws.com'),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonSSMManagedInstanceCore'),
-        iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonBedrockFullAccess'),
-      ],
+    // ==========================================================================
+    // ECS Cluster
+    // ==========================================================================
+    const cluster = new ecs.Cluster(this, 'StockAppCluster', {
+      vpc,
+      clusterName: 'StockAppCluster',
+      containerInsights: true,
     });
 
-    // S3 access for deployment
-    ec2Role.addToPolicy(new iam.PolicyStatement({
-      actions: ['s3:GetObject'],
-      resources: [`arn:aws:s3:::${deployBucket}/*`],
+    // ==========================================================================
+    // ECS Task Definition
+    // ==========================================================================
+    const taskDefinition = new ecs.FargateTaskDefinition(this, 'StockAppTaskDef', {
+      memoryLimitMiB: 4096,  // 4GB
+      cpu: 2048,             // 2 vCPU
+      runtimePlatform: {
+        cpuArchitecture: ecs.CpuArchitecture.X86_64,
+        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+      },
+    });
+
+    // Bedrock 접근 권한 추가
+    taskDefinition.addToTaskRolePolicy(new iam.PolicyStatement({
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream',
+      ],
+      resources: ['*'],
     }));
 
-    // User Data for EC2
-    const userData = ec2.UserData.forLinux();
-    userData.addCommands(
-      'set -e',
-      'exec > >(tee /var/log/user-data.log) 2>&1',
-      'yum update -y',
-      'yum install -y python3.11 python3.11-pip unzip',
-      'cd /home/ec2-user',
-      `aws s3 cp s3://${deployBucket}/stock-app.zip .`,
-      'unzip -o -q stock-app.zip',
-      'python3.11 -m venv venv',
-      'source venv/bin/activate && pip install -r requirements.txt',
-      // Create systemd service for auto-start and restart on failure
-      'cat > /etc/systemd/system/streamlit.service << EOF',
-      '[Unit]',
-      'Description=Streamlit Stock App',
-      'After=network.target',
-      '',
-      '[Service]',
-      'Type=simple',
-      'User=root',
-      'WorkingDirectory=/home/ec2-user',
-      'ExecStart=/home/ec2-user/venv/bin/streamlit run app.py --server.port 8501 --server.address 0.0.0.0',
-      'Restart=always',
-      'RestartSec=3',
-      '',
-      '[Install]',
-      'WantedBy=multi-user.target',
-      'EOF',
-      'systemctl daemon-reload',
-      'systemctl enable streamlit',
-      'systemctl start streamlit',
-      'sleep 5'
-    );
-
-    // EC2 Instance
-    const instance = new ec2.Instance(this, 'StockAppInstance', {
-      vpc,
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MEDIUM),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023(),
-      securityGroup: ec2Sg,
-      role: ec2Role,
-      userData,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    // CloudWatch Logs 그룹
+    const logGroup = new logs.LogGroup(this, 'StockAppLogGroup', {
+      logGroupName: '/ecs/stock-app',
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // 컨테이너 정의
+    const container = taskDefinition.addContainer('StockAppContainer', {
+      image: ecs.ContainerImage.fromEcrRepository(ecrRepository, 'latest'),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: 'stock-app',
+        logGroup,
+      }),
+      healthCheck: {
+        command: ['CMD-SHELL', 'python -c "import urllib.request; urllib.request.urlopen(\'http://localhost:8501/_stcore/health\')" || exit 1'],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5),
+        startPeriod: cdk.Duration.seconds(60),
+        retries: 3,
+      },
+    });
+
+    container.addPortMappings({
+      containerPort: 8501,
+      protocol: ecs.Protocol.TCP,
+    });
+
+    // ==========================================================================
     // Application Load Balancer
+    // ==========================================================================
     const alb = new elbv2.ApplicationLoadBalancer(this, 'StockAppAlb', {
       vpc,
       internetFacing: true,
       securityGroup: albSg,
     });
 
-    // ==========================================================================
     // ALB 액세스 로그 활성화
-    // ==========================================================================
     alb.logAccessLogs(logBucket, 'alb-logs');
 
-    // Target Group
+    // ==========================================================================
+    // ECS Fargate Service
+    // ==========================================================================
+    const fargateService = new ecs.FargateService(this, 'StockAppService', {
+      cluster,
+      taskDefinition,
+      serviceName: 'StockAppService',
+      desiredCount: 1,
+      assignPublicIp: false,
+      securityGroups: [ecsSg],
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      circuitBreaker: { rollback: true },
+      enableExecuteCommand: true,  // ECS Exec 활성화 (디버깅용)
+    });
+
+    // ==========================================================================
+    // ALB Target Group & Listener
+    // ==========================================================================
     const targetGroup = new elbv2.ApplicationTargetGroup(this, 'StockAppTargetGroup', {
       vpc,
       port: 8501,
       protocol: elbv2.ApplicationProtocol.HTTP,
-      targets: [new targets.InstanceTarget(instance)],
+      targetType: elbv2.TargetType.IP,
       healthCheck: {
-        path: '/',
+        path: '/_stcore/health',
         interval: cdk.Duration.seconds(30),
         timeout: cdk.Duration.seconds(5),
+        healthyHttpCodes: '200',
       },
     });
 
-    // ==========================================================================
-    // ALB Listener 설정
-    // 커스텀 헤더 검증을 통해 CloudFront 외 접근 차단
-    // ==========================================================================
+    // ECS Service를 Target Group에 연결
+    fargateService.attachToApplicationTargetGroup(targetGroup);
+
+    // ALB Listener - 커스텀 헤더 검증
     const listener = alb.addListener('HttpListener', {
       port: 80,
       defaultAction: elbv2.ListenerAction.fixedResponse(403, {
@@ -187,13 +214,11 @@ export class StockAppStack extends cdk.Stack {
 
     // ==========================================================================
     // CloudFront Distribution
-    // 비밀 헤더를 추가하여 Origin(ALB)으로 요청 전달
     // ==========================================================================
     const distribution = new cloudfront.Distribution(this, 'StockAppDistribution', {
       defaultBehavior: {
         origin: new origins.LoadBalancerV2Origin(alb, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-          // CloudFront → ALB 요청에 비밀 헤더 추가
           customHeaders: {
             'X-Origin-Verify': originVerifySecret.secretValue.unsafeUnwrap(),
           },
@@ -203,29 +228,57 @@ export class StockAppStack extends cdk.Stack {
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
       },
-      // ==========================================================================
-      // CloudFront 액세스 로그 활성화
-      // ==========================================================================
       enableLogging: true,
       logBucket: logBucket,
       logFilePrefix: 'cloudfront-logs/',
       logIncludesCookies: true,
     });
 
+    // ==========================================================================
+    // Auto Scaling (선택적)
+    // ==========================================================================
+    const scaling = fargateService.autoScaleTaskCount({
+      minCapacity: 1,
+      maxCapacity: 3,
+    });
+
+    scaling.scaleOnCpuUtilization('CpuScaling', {
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(60),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    // ==========================================================================
     // Outputs
+    // ==========================================================================
     new cdk.CfnOutput(this, 'CloudFrontUrl', {
       value: `https://${distribution.distributionDomainName}`,
-      description: 'CloudFront URL',
+      description: 'CloudFront URL (Use this URL to access the application)',
     });
 
     new cdk.CfnOutput(this, 'AlbDnsName', {
       value: alb.loadBalancerDnsName,
-      description: 'ALB DNS Name',
+      description: 'ALB DNS Name (Do not access directly)',
+    });
+
+    new cdk.CfnOutput(this, 'EcrRepositoryUri', {
+      value: ecrRepository.repositoryUri,
+      description: 'ECR Repository URI',
+    });
+
+    new cdk.CfnOutput(this, 'EcsClusterName', {
+      value: cluster.clusterName,
+      description: 'ECS Cluster Name',
+    });
+
+    new cdk.CfnOutput(this, 'EcsServiceName', {
+      value: fargateService.serviceName,
+      description: 'ECS Service Name',
     });
 
     new cdk.CfnOutput(this, 'LogBucketName', {
       value: logBucket.bucketName,
-      description: 'S3 Bucket for ALB and CloudFront access logs',
+      description: 'S3 Bucket for access logs',
     });
   }
 }

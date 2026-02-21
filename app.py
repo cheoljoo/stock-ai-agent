@@ -738,6 +738,11 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
             # 회사명을 티커 심볼로 변환 (예: "삼성전자" → "005930.KS")
             ticker = get_ticker(company_name)
 
+            # 종목이 변경되면 이전 예측 결과 초기화
+            if st.session_state.get('forecast_ticker') and st.session_state.forecast_ticker != ticker:
+                st.session_state.forecast_result = None
+                st.session_state.forecast_ticker = None
+
             # ---------------------------------------------------------------------
             # yfinance를 통한 주가 데이터 조회
             # ---------------------------------------------------------------------
@@ -871,6 +876,12 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                 with tab2:
                     st.subheader("🔮 AI 주가 예측")
 
+                    # 예측 결과를 저장할 session_state 초기화
+                    if 'forecast_result' not in st.session_state:
+                        st.session_state.forecast_result = None
+                    if 'forecast_ticker' not in st.session_state:
+                        st.session_state.forecast_ticker = None
+
                     # 예측 기간 선택 드롭다운
                     forecast_period = st.selectbox(
                         "예측 기간",
@@ -879,7 +890,10 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                     )
 
                     # AI 예측 생성 버튼
-                    if st.button("🤖 AI 예측 생성", use_container_width=True):
+                    generate_forecast = st.button("🤖 AI 예측 생성", use_container_width=True)
+
+                    # 버튼 클릭 시 예측 실행
+                    if generate_forecast:
                         with st.spinner("AI가 종합 분석 중..."):
                             try:
                                 # ---------------------------------------------------------
@@ -1002,104 +1016,125 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                                 )
                                 
                                 forecast_response = str(forecast_agent(f"{company_name} {forecast_period} 주가 예측"))
-                                
+
                                 # 예측 주가 추출
                                 price_match = re.search(r'예상주가:\s*([0-9,.]+)', forecast_response)
                                 predicted_price = None
                                 if price_match:
                                     predicted_price = float(price_match.group(1).replace(',', ''))
-                                
-                                # 그래프 생성
-                                if predicted_price:
-                                    fig_forecast = go.Figure()
-                                    
-                                    # 과거 데이터 (최근 30일)
-                                    recent_df = df.tail(30)
-                                    fig_forecast.add_trace(go.Scatter(
-                                        x=recent_df.index,
-                                        y=recent_df['Close'],
-                                        name='실제 주가',
-                                        line=dict(color='#4ECDC4', width=2),
-                                        mode='lines'
-                                    ))
-                                    
-                                    # 예측 포인트
-                                    last_date = df.index[-1]
-                                    # 예측 기간을 일수로 변환
-                                    period_days = {"1일": 1, "7일": 7, "1개월": 30, "3개월": 90, "6개월": 180}
-                                    future_date = last_date + pd.Timedelta(days=period_days[forecast_period])
-                                    
-                                    # 현재가 → 예측가 연결선
-                                    fig_forecast.add_trace(go.Scatter(
-                                        x=[last_date, future_date],
-                                        y=[current_price, predicted_price],
-                                        name='예측',
-                                        line=dict(color='#FF6B6B', width=2, dash='dash'),
-                                        mode='lines+markers',
-                                        marker=dict(size=10)
-                                    ))
-                                    
-                                    # 신뢰 구간 (±10%)
-                                    upper_bound = predicted_price * 1.1
-                                    lower_bound = predicted_price * 0.9
-                                    
-                                    fig_forecast.add_trace(go.Scatter(
-                                        x=[future_date, future_date],
-                                        y=[lower_bound, upper_bound],
-                                        mode='lines',
-                                        line=dict(color='rgba(255,107,107,0.3)', width=0),
-                                        showlegend=False,
-                                        hoverinfo='skip'
-                                    ))
-                                    
-                                    fig_forecast.update_layout(
-                                        title=f"{company_name} AI 주가 예측 ({forecast_period})",
-                                        yaxis_title="가격",
-                                        xaxis_title="날짜",
-                                        template="plotly_white",
-                                        height=400,
-                                        hovermode='x unified'
-                                    )
-                                    
-                                    st.plotly_chart(fig_forecast, use_container_width=True)
-                                    
-                                    # 예측 요약 카드
-                                    price_change = predicted_price - current_price
-                                    # ZeroDivision 방지
-                                    price_change_pct = (price_change / current_price) * 100 if current_price > 0 else 0
 
-                                    # 통화 단위 결정
-                                    curr_format = f"{current_price:,.0f}원" if ticker.endswith(".KS") else f"${current_price:,.2f}"
-                                    pred_format = f"{predicted_price:,.0f}원" if ticker.endswith(".KS") else f"${predicted_price:,.2f}"
+                                # 예측 결과를 session_state에 저장
+                                st.session_state.forecast_result = {
+                                    'response': forecast_response,
+                                    'predicted_price': predicted_price,
+                                    'current_price': current_price,
+                                    'company_name': company_name,
+                                    'forecast_period': forecast_period,
+                                    'ticker': ticker,
+                                    'df': df.tail(30).copy()  # 차트용 데이터
+                                }
+                                st.session_state.forecast_ticker = ticker
 
-                                    col1, col2, col3 = st.columns(3)
-                                    with col1:
-                                        st.metric("현재가", curr_format)
-                                    with col2:
-                                        st.metric(
-                                            f"{forecast_period} 후 예측",
-                                            pred_format,
-                                            f"{price_change_pct:+.2f}%"
-                                        )
-                                    with col3:
-                                        if price_change_pct > 0:
-                                            st.success("📈 상승 예상")
-                                        elif price_change_pct < 0:
-                                            st.error("📉 하락 예상")
-                                        else:
-                                            st.info("➡️ 보합 예상")
-                                
-                                # AI 예측 결과 표시
-                                st.markdown("---")
-                                st.markdown("### 🤖 AI 종합 분석")
-                                st.markdown(forecast_response)
-                                
-                                st.divider()
-                                st.caption("💡 이 예측은 현재 기술적 지표, 최근 뉴스, 시장 상황을 종합한 AI 분석입니다.")
-                                
                             except Exception as e:
                                 st.error(f"예측 중 오류 발생: {str(e)}")
-                    else:
+                                st.session_state.forecast_result = None
+
+                    # session_state에 저장된 예측 결과 표시 (같은 종목일 때만)
+                    if st.session_state.forecast_result and st.session_state.forecast_ticker == ticker:
+                        result = st.session_state.forecast_result
+                        predicted_price = result['predicted_price']
+                        current_price = result['current_price']
+                        forecast_response = result['response']
+                        saved_forecast_period = result['forecast_period']
+                        recent_df = result['df']
+
+                        # 그래프 생성
+                        if predicted_price:
+                            fig_forecast = go.Figure()
+
+                            # 과거 데이터 (최근 30일)
+                            fig_forecast.add_trace(go.Scatter(
+                                x=recent_df.index,
+                                y=recent_df['Close'],
+                                name='실제 주가',
+                                line=dict(color='#4ECDC4', width=2),
+                                mode='lines'
+                            ))
+
+                            # 예측 포인트
+                            last_date = recent_df.index[-1]
+                            # 예측 기간을 일수로 변환
+                            period_days = {"1일": 1, "7일": 7, "1개월": 30, "3개월": 90, "6개월": 180}
+                            future_date = last_date + pd.Timedelta(days=period_days[saved_forecast_period])
+
+                            # 현재가 → 예측가 연결선
+                            fig_forecast.add_trace(go.Scatter(
+                                x=[last_date, future_date],
+                                y=[current_price, predicted_price],
+                                name='예측',
+                                line=dict(color='#FF6B6B', width=2, dash='dash'),
+                                mode='lines+markers',
+                                marker=dict(size=10)
+                            ))
+
+                            # 신뢰 구간 (±10%)
+                            upper_bound = predicted_price * 1.1
+                            lower_bound = predicted_price * 0.9
+
+                            fig_forecast.add_trace(go.Scatter(
+                                x=[future_date, future_date],
+                                y=[lower_bound, upper_bound],
+                                mode='lines',
+                                line=dict(color='rgba(255,107,107,0.3)', width=0),
+                                showlegend=False,
+                                hoverinfo='skip'
+                            ))
+
+                            fig_forecast.update_layout(
+                                title=f"{result['company_name']} AI 주가 예측 ({saved_forecast_period})",
+                                yaxis_title="가격",
+                                xaxis_title="날짜",
+                                template="plotly_white",
+                                height=400,
+                                hovermode='x unified'
+                            )
+
+                            st.plotly_chart(fig_forecast, use_container_width=True)
+
+                            # 예측 요약 카드
+                            price_change = predicted_price - current_price
+                            # ZeroDivision 방지
+                            price_change_pct = (price_change / current_price) * 100 if current_price > 0 else 0
+
+                            # 통화 단위 결정
+                            curr_format = f"{current_price:,.0f}원" if ticker.endswith(".KS") else f"${current_price:,.2f}"
+                            pred_format = f"{predicted_price:,.0f}원" if ticker.endswith(".KS") else f"${predicted_price:,.2f}"
+
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("현재가", curr_format)
+                            with col2:
+                                st.metric(
+                                    f"{saved_forecast_period} 후 예측",
+                                    pred_format,
+                                    f"{price_change_pct:+.2f}%"
+                                )
+                            with col3:
+                                if price_change_pct > 0:
+                                    st.success("📈 상승 예상")
+                                elif price_change_pct < 0:
+                                    st.error("📉 하락 예상")
+                                else:
+                                    st.info("➡️ 보합 예상")
+
+                        # AI 예측 결과 표시
+                        st.markdown("---")
+                        st.markdown("### 🤖 AI 종합 분석")
+                        st.markdown(forecast_response)
+
+                        st.divider()
+                        st.caption("💡 이 예측은 현재 기술적 지표, 최근 뉴스, 시장 상황을 종합한 AI 분석입니다.")
+                    elif not st.session_state.forecast_result:
                         st.info("👆 버튼을 클릭하여 AI 기반 주가 예측을 생성하세요.")
                 
                 # =============================================================

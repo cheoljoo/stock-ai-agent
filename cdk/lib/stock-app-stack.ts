@@ -54,19 +54,13 @@ export class StockAppStack extends cdk.Stack {
     });
 
     // ==========================================================================
-    // ECR 레포지토리 (기존 레포지토리 참조 또는 생성)
+    // ECR 레포지토리 (기존 레포지토리 참조)
     // ==========================================================================
-    const ecrRepository = new ecr.Repository(this, 'StockAppRepository', {
-      repositoryName: 'stock-app',
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-      imageScanOnPush: true,
-      lifecycleRules: [
-        {
-          maxImageCount: 10,
-          description: 'Keep only 10 images',
-        },
-      ],
-    });
+    const ecrRepository = ecr.Repository.fromRepositoryName(
+      this,
+      'StockAppRepository',
+      'stock-app'
+    );
 
     // ==========================================================================
     // Security Groups

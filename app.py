@@ -1922,6 +1922,43 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
             with st.container():
                 # 상세 분석 내용을 확장 가능한 패널로 표시
                 with st.expander("📋 상세 분석 보기", expanded=True):
+                    # 복사 버튼 (JavaScript 클립보드 API 사용)
+                    import json
+                    copy_text_json = json.dumps(response_text, ensure_ascii=False)
+
+                    st.components.v1.html(f"""
+                    <button onclick="copyToClipboard()" style="
+                        background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%);
+                        color: white;
+                        border: none;
+                        border-radius: 8px;
+                        padding: 8px 16px;
+                        font-size: 14px;
+                        font-weight: 600;
+                        cursor: pointer;
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                        transition: all 0.2s ease;
+                    " onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+                        <span>📋</span> 분석 결과 복사
+                    </button>
+                    <span id="copyStatus" style="margin-left: 10px; color: #10b981; font-size: 14px;"></span>
+                    <script>
+                    function copyToClipboard() {{
+                        const text = {copy_text_json};
+                        navigator.clipboard.writeText(text).then(function() {{
+                            document.getElementById('copyStatus').innerText = '✅ 복사 완료!';
+                            setTimeout(function() {{
+                                document.getElementById('copyStatus').innerText = '';
+                            }}, 2000);
+                        }}, function(err) {{
+                            document.getElementById('copyStatus').innerText = '❌ 복사 실패';
+                        }});
+                    }}
+                    </script>
+                    """, height=50)
+
                     st.markdown(response_text)
 
             # 조회 히스토리에 저장 (최근 검색 기록 유지)

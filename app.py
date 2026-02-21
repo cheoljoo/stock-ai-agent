@@ -39,7 +39,12 @@ from stock_agent import (
     get_fundamental_analysis,   # 기본적 분석 도구
     get_institutional_holders,  # 기관 보유 현황 도구
     get_peer_comparison,        # 동종업계 비교 도구
-    get_macro_indicators        # 거시경제 지표 도구
+    get_macro_indicators,       # 거시경제 지표 도구
+    get_market_movers,          # 시장 현황 (급등/급락/거래량)
+    get_theme_stocks,           # 테마별 종목
+    get_dividend_info,          # 배당금 정보
+    THEME_STOCKS,               # 테마 데이터
+    TICKER_MAP                  # 티커 매핑 (자동완성용)
 )
 
 # AWS Bedrock 연동
@@ -54,6 +59,240 @@ st.set_page_config(
     page_icon="💹",                    # 파비콘
     layout="wide"                      # 넓은 레이아웃 사용
 )
+
+# =============================================================================
+# 다크모드 및 모바일 반응형 CSS (TOSS 스타일)
+# =============================================================================
+def get_theme_css(is_dark: bool) -> str:
+    """다크모드/라이트모드 CSS 반환"""
+    if is_dark:
+        return """
+        <style>
+        /* 다크모드 기본 색상 */
+        :root {
+            --bg-primary: #1a1a2e;
+            --bg-secondary: #16213e;
+            --bg-card: #1f2937;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-blue: #3b82f6;
+            --border-color: #374151;
+        }
+
+        .stApp {
+            background-color: var(--bg-primary);
+        }
+
+        .stMetric {
+            background-color: var(--bg-card);
+            padding: 1rem;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        /* 카드 스타일 */
+        .stock-card {
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-secondary) 100%);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin: 0.5rem 0;
+            border: 1px solid var(--border-color);
+            transition: transform 0.2s ease;
+        }
+
+        .stock-card:hover {
+            transform: translateY(-2px);
+        }
+
+        /* 상승/하락 색상 */
+        .price-up { color: var(--accent-red) !important; }
+        .price-down { color: var(--accent-blue) !important; }
+
+        /* 모바일 반응형 */
+        @media (max-width: 768px) {
+            .stColumn > div { padding: 0.25rem !important; }
+            .stMetric { padding: 0.5rem; }
+            h1 { font-size: 1.5rem !important; }
+            h2 { font-size: 1.2rem !important; }
+        }
+
+        /* 스크롤바 스타일 */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-secondary); }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+
+        /* 버튼 스타일 */
+        .stButton > button {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, #6366f1 100%);
+            border: none;
+            border-radius: 12px;
+            padding: 0.75rem 1.5rem;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .stButton > button:hover {
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+
+        /* 검색창 스타일 */
+        .stTextInput > div > div > input {
+            background-color: var(--bg-card);
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-primary);
+            padding: 0.75rem 1rem;
+        }
+
+        .stTextInput > div > div > input:focus {
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+
+        /* 탭 스타일 */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+            background-color: var(--bg-secondary);
+            padding: 0.5rem;
+            border-radius: 12px;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            color: #f1f5f9 !important;
+            font-weight: 500;
+        }
+
+        .stTabs [data-baseweb="tab"]:hover {
+            background-color: var(--bg-card);
+        }
+
+        .stTabs [aria-selected="true"] {
+            color: #3b82f6 !important;
+            background-color: var(--bg-card) !important;
+            font-weight: 600;
+        }
+
+        /* 52주 범위 바 */
+        .range-bar {
+            height: 8px;
+            background: linear-gradient(90deg, var(--accent-blue) 0%, var(--bg-card) 50%, var(--accent-red) 100%);
+            border-radius: 4px;
+            position: relative;
+        }
+
+        .range-indicator {
+            width: 12px;
+            height: 12px;
+            background: white;
+            border-radius: 50%;
+            position: absolute;
+            top: -2px;
+            transform: translateX(-50%);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        </style>
+        """
+    else:
+        return """
+        <style>
+        /* 라이트모드 기본 색상 */
+        :root {
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --bg-card: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-blue: #3b82f6;
+            --border-color: #e2e8f0;
+        }
+
+        /* 카드 스타일 */
+        .stock-card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin: 0.5rem 0;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .stock-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        /* 상승/하락 색상 (한국식: 상승=빨강, 하락=파랑) */
+        .price-up { color: var(--accent-red) !important; }
+        .price-down { color: var(--accent-blue) !important; }
+
+        /* 모바일 반응형 */
+        @media (max-width: 768px) {
+            .stColumn > div { padding: 0.25rem !important; }
+            h1 { font-size: 1.5rem !important; }
+            h2 { font-size: 1.2rem !important; }
+        }
+
+        /* 버튼 스타일 */
+        .stButton > button {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, #6366f1 100%);
+            border: none;
+            border-radius: 12px;
+            padding: 0.75rem 1.5rem;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .stButton > button:hover {
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        /* 검색창 스타일 */
+        .stTextInput > div > div > input {
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            padding: 0.75rem 1rem;
+        }
+
+        .stTextInput > div > div > input:focus {
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        /* 탭 스타일 */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+            background-color: var(--bg-primary);
+            padding: 0.5rem;
+            border-radius: 12px;
+        }
+
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            color: #1e293b !important;
+            font-weight: 500;
+        }
+
+        .stTabs [data-baseweb="tab"]:hover {
+            background-color: var(--bg-secondary);
+        }
+
+        .stTabs [aria-selected="true"] {
+            color: #3b82f6 !important;
+            background-color: var(--bg-secondary) !important;
+            font-weight: 600;
+        }
+        </style>
+        """
 
 # =============================================================================
 # 세션 상태 초기화
@@ -238,6 +477,21 @@ if 'system_prompt' not in st.session_state:
 if 'history' not in st.session_state:
     st.session_state.history = []
 
+# 다크모드 상태 초기화
+if 'dark_mode' not in st.session_state:
+    st.session_state.dark_mode = False
+
+# 시장 현황 캐시 (5분마다 갱신)
+if 'market_cache' not in st.session_state:
+    st.session_state.market_cache = None
+    st.session_state.market_cache_time = None
+
+# 테마 CSS 적용
+st.markdown(get_theme_css(st.session_state.dark_mode), unsafe_allow_html=True)
+
+# 자동완성용 종목 리스트
+STOCK_SUGGESTIONS = list(TICKER_MAP.keys())
+
 # =============================================================================
 # 페이지 헤더
 # =============================================================================
@@ -245,32 +499,106 @@ st.title("💹 실시간 주가 조회 및 AI 기반 투자 분석 서비스")
 st.markdown("실시간 주가 조회 및 AI 기반 투자 분석")
 
 # =============================================================================
-# 사이드바 - 사용 가이드 및 관심 종목 관리
+# 사이드바 - 다크모드, 시장현황, 관심종목, 테마
 # =============================================================================
 with st.sidebar:
-    st.header("📌 사용 가이드")
-    st.markdown("""
-    **지원 기능:**
-    - 실시간 주가 조회
-    - 기술적 분석 (이동평균, RSI, MACD 등)
-    - 뉴스 감성 분석
-    
-    **입력 예시:**
-    - 삼성전자
-    - 삼성전자 주가분석
-    - SK 하이닉스 매수 타이밍
-    - Amazon
-    """)
-    
+    # -------------------------------------------------------------------------
+    # 다크모드 토글 (TOSS 스타일)
+    # -------------------------------------------------------------------------
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown("### 💹 Stock AI")
+    with col2:
+        if st.button("🌙" if not st.session_state.dark_mode else "☀️", key="theme_toggle"):
+            st.session_state.dark_mode = not st.session_state.dark_mode
+            st.rerun()
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # 시장 현황 대시보드 (TOSS 스타일)
+    # -------------------------------------------------------------------------
+    st.header("📊 시장 현황")
+
+    # 캐시 확인 (5분마다 갱신)
+    import time as time_module
+    current_time = time_module.time()
+    cache_valid = (st.session_state.market_cache_time and
+                   current_time - st.session_state.market_cache_time < 300)
+
+    if not cache_valid:
+        with st.spinner("시장 데이터 로딩..."):
+            try:
+                st.session_state.market_cache = get_market_movers()
+                st.session_state.market_cache_time = current_time
+            except Exception:
+                st.session_state.market_cache = None
+
+    market_data = st.session_state.market_cache
+
+    if market_data:
+        # 거래량 TOP
+        with st.expander("🔥 거래량 TOP", expanded=True):
+            for stock in market_data.get("volume_leaders", [])[:3]:
+                change = stock['change_percent']
+                color = "🔴" if change > 0 else "🔵" if change < 0 else "⚪"
+                if st.button(
+                    f"{color} {stock['name']} {change:+.1f}%",
+                    key=f"vol_{stock['ticker']}",
+                    use_container_width=True
+                ):
+                    st.session_state.company_input = stock['name']
+                    st.rerun()
+
+        # 급등 종목
+        with st.expander("📈 급등 종목", expanded=False):
+            for stock in market_data.get("gainers", [])[:3]:
+                if st.button(
+                    f"🔴 {stock['name']} +{stock['change_percent']:.1f}%",
+                    key=f"gain_{stock['ticker']}",
+                    use_container_width=True
+                ):
+                    st.session_state.company_input = stock['name']
+                    st.rerun()
+
+        # 급락 종목
+        with st.expander("📉 급락 종목", expanded=False):
+            for stock in market_data.get("losers", [])[:3]:
+                if st.button(
+                    f"🔵 {stock['name']} {stock['change_percent']:.1f}%",
+                    key=f"lose_{stock['ticker']}",
+                    use_container_width=True
+                ):
+                    st.session_state.company_input = stock['name']
+                    st.rerun()
+
+        st.caption(f"업데이트: {market_data.get('updated_at', 'N/A')}")
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # 테마 종목 (TOSS 스타일)
+    # -------------------------------------------------------------------------
+    st.header("🎯 테마 종목")
+
+    theme_tabs = st.tabs(["AI", "EV", "빅테크", "배당"])
+    theme_names = ["AI/반도체", "전기차/배터리", "빅테크", "배당주"]
+
+    for tab, theme_name in zip(theme_tabs, theme_names):
+        with tab:
+            theme_data = THEME_STOCKS.get(theme_name, {})
+            for ticker, name, desc in theme_data.get("stocks", [])[:3]:
+                if st.button(f"{name}", key=f"theme_{ticker}", use_container_width=True):
+                    st.session_state.company_input = name
+                    st.rerun()
+
     st.divider()
 
     # -------------------------------------------------------------------------
     # 관심 종목 관리 섹션
-    # 사용자가 자주 조회하는 종목을 저장하고 빠르게 접근 가능
     # -------------------------------------------------------------------------
     st.header("⭐ 관심 종목")
 
-    # 세션 상태에 관심 종목 리스트 초기화 (기본 3개 종목)
     if 'watchlist' not in st.session_state:
         st.session_state.watchlist = ["삼성전자", "SK하이닉스", "네이버"]
 
@@ -284,11 +612,10 @@ with st.sidebar:
                 st.success(f"{new_stock} 추가됨!")
             else:
                 st.warning("이미 등록된 종목입니다.")
-    
-    # 관심 종목 목록 (클릭 가능)
-    st.markdown("**등록된 종목:**")
+
+    # 관심 종목 목록 (현재가 표시)
     for stock in st.session_state.watchlist:
-        col1, col2 = st.columns([3, 1])
+        col1, col2 = st.columns([4, 1])
         with col1:
             if st.button(stock, key=f"watch_{stock}", use_container_width=True):
                 st.session_state.company_input = stock
@@ -297,46 +624,60 @@ with st.sidebar:
             if st.button("🗑️", key=f"del_{stock}"):
                 st.session_state.watchlist.remove(stock)
                 st.rerun()
-    
-    st.divider()
-    
-    st.header("📈 지원 종목")
-    st.markdown("""
-    **한국 주식:**
-    - 삼성전자, SK하이닉스
-    - 네이버, 카카오
-    - 현대차, LG전자, 포스코
-    
-    **미국 주식:**
-    - Amazon, Apple, Tesla
-    - Google, Microsoft, Meta, Nvidia
-    """)
 
 # =============================================================================
-# 메인 입력 영역
+# 메인 입력 영역 (검색 자동완성 포함)
 # =============================================================================
-col1, col2 = st.columns([3, 1])  # 3:1 비율로 컬럼 분할
+col1, col2 = st.columns([3, 1])
 
 with col1:
-    # 회사명 입력 필드
-    user_input = st.text_input(
-        "회사명을 입력하세요",
-        placeholder="예: 삼성전자, Amazon, SK 하이닉스",
-        key="company_input"
-    )
-
-with col2:
-    # 분석 시작 버튼 (크기 2배 확대)
+    # 검색어 자동완성을 위한 selectbox + text_input 조합
+    # 자동완성 힌트 표시
     st.markdown("""
     <style>
-    div[data-testid="column"]:nth-of-type(2) button {
-        font-size: 1.5rem !important;
-        padding: 1rem 2rem !important;
-        height: auto !important;
-        min-height: 80px !important;
+    .search-hints {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.5rem;
+    }
+    .search-hints span {
+        background: var(--bg-card);
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        margin-right: 0.3rem;
+        cursor: pointer;
     }
     </style>
     """, unsafe_allow_html=True)
+
+    # 빠른 검색 선택값 초기화
+    if 'quick_stock_selected' not in st.session_state:
+        st.session_state.quick_stock_selected = ""
+
+    # 회사명 입력 필드
+    user_input = st.text_input(
+        "🔍 종목 검색",
+        placeholder="종목명 또는 티커 입력 (예: 삼성전자, NVDA)",
+        key="company_input"
+    )
+
+    # 빠른 검색 선택 시 해당 값 사용
+    if st.session_state.quick_stock_selected:
+        user_input = st.session_state.quick_stock_selected
+
+    # 인기 검색어 버튼
+    st.markdown("**빠른 검색:**")
+    quick_cols = st.columns(6)
+    quick_stocks = ["삼성전자", "NVDA", "TSLA", "SK하이닉스", "애플", "네이버"]
+    for i, stock in enumerate(quick_stocks):
+        with quick_cols[i]:
+            if st.button(stock, key=f"quick_{stock}", use_container_width=True):
+                st.session_state.quick_stock_selected = stock
+                st.session_state.auto_analyze = True
+                st.rerun()
+
+with col2:
+    st.markdown("<br>", unsafe_allow_html=True)  # 정렬용 공백
     analyze_button = st.button("🔍 분석하기", type="primary", use_container_width=True)
 
 # -------------------------------------------------------------------------
@@ -379,6 +720,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
         try:
             # 자동 분석 플래그 설정 (기간 변경 시 자동 재분석용)
             st.session_state.auto_analyze = True
+            # 빠른 검색 선택값 초기화
+            st.session_state.quick_stock_selected = ""
 
             # ---------------------------------------------------------------------
             # 회사명 전처리: "삼성전자 주가분석" → "삼성전자"
@@ -403,18 +746,11 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
             
             if not df.empty:
                 # -----------------------------------------------------------------
-                # 7개 탭으로 분석 결과 표시
-                # 1. 차트: 캔들스틱 + 이동평균선
-                # 2. 예측: AI 기반 미래 주가 예측
-                # 3. 기술적 분석: RSI, MACD, 볼린저밴드
-                # 4. 펀더멘털: 밸류에이션, 수익성, 재무건전성
-                # 5. 동종업계 비교: 경쟁사 대비 평가
-                # 6. 거시경제: 지수, 금리, 환율, VIX
-                # 7. 뉴스: 감성 분석 포함
+                # 8개 탭으로 분석 결과 표시 (배당금 탭 추가)
                 # -----------------------------------------------------------------
-                tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+                tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
                     "📈 차트", "🔮 주가예측", "📊 기술적 분석",
-                    "💰 펀더멘털", "🏆 동종업계 비교", "🌍 거시경제", "📰 뉴스"
+                    "💰 펀더멘털", "💵 배당금", "🏆 동종업계 비교", "🌍 거시경제", "📰 뉴스"
                 ])
 
                 # =============================================================
@@ -494,6 +830,39 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                         st.metric("최저가", low_format)   # 기간 내 최저가
                     with col4:
                         st.metric("거래량", f"{df['Volume'].iloc[-1]:,.0f}")  # 최근 거래량
+
+                    # ---------------------------------------------------------
+                    # 52주 범위 시각화 (TOSS 스타일)
+                    # ---------------------------------------------------------
+                    try:
+                        info = stock.info
+                        high_52w = info.get('fiftyTwoWeekHigh', df['High'].max())
+                        low_52w = info.get('fiftyTwoWeekLow', df['Low'].min())
+
+                        if high_52w and low_52w and high_52w > low_52w:
+                            range_52w = high_52w - low_52w
+                            position = ((current_price - low_52w) / range_52w) * 100
+
+                            st.markdown("#### 📊 52주 범위")
+                            col1, col2, col3 = st.columns([1, 3, 1])
+                            with col1:
+                                low_fmt = f"{low_52w:,.0f}" if ticker.endswith(".KS") else f"${low_52w:,.2f}"
+                                st.caption(f"저가\n{low_fmt}")
+                            with col2:
+                                # 프로그레스 바로 현재 위치 표시
+                                st.progress(min(max(position / 100, 0), 1))
+                                st.caption(f"현재 위치: {position:.1f}%")
+                            with col3:
+                                high_fmt = f"{high_52w:,.0f}" if ticker.endswith(".KS") else f"${high_52w:,.2f}"
+                                st.caption(f"고가\n{high_fmt}")
+
+                            # 52주 신고가/신저가 근접 알림
+                            if position >= 95:
+                                st.success("🎯 52주 신고가 근접! (상위 5%)")
+                            elif position <= 5:
+                                st.warning("⚠️ 52주 신저가 근접 (하위 5%)")
+                    except Exception:
+                        pass
                 
                 # =============================================================
                 # 탭 2: AI 기반 주가 예측
@@ -924,10 +1293,114 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                         st.warning("펀더멘털 데이터를 조회할 수 없습니다.")
 
                 # =============================================================
-                # 탭 5: 동종업계 비교 분석
-                # 같은 섹터/업종의 경쟁사와 주요 지표 비교
+                # 탭 5: 배당금 정보 (신규 추가)
                 # =============================================================
                 with tab5:
+                    st.subheader("💵 배당금 정보")
+
+                    with st.spinner("배당 정보 조회 중..."):
+                        dividend_info = get_dividend_info(company_name)
+
+                    if "error" not in dividend_info:
+                        is_dividend = dividend_info.get("is_dividend_stock", False)
+
+                        if is_dividend:
+                            # 배당 요약 카드
+                            col1, col2, col3, col4 = st.columns(4)
+
+                            with col1:
+                                div_yield = dividend_info.get("dividend_yield")
+                                yield_status = "고배당" if div_yield and div_yield > 4 else ("중배당" if div_yield and div_yield > 2 else "저배당")
+                                st.metric(
+                                    "배당 수익률",
+                                    f"{div_yield:.2f}%" if div_yield else "N/A",
+                                    yield_status if div_yield else None
+                                )
+
+                            with col2:
+                                div_rate = dividend_info.get("dividend_rate")
+                                currency = "원" if ticker.endswith(".KS") else "$"
+                                st.metric(
+                                    "주당 배당금",
+                                    f"{currency}{div_rate:.2f}" if div_rate else "N/A"
+                                )
+
+                            with col3:
+                                payout = dividend_info.get("payout_ratio")
+                                payout_status = "적정" if payout and 30 <= payout <= 60 else ("고배당" if payout and payout > 60 else "저배당")
+                                st.metric(
+                                    "배당성향",
+                                    f"{payout:.1f}%" if payout else "N/A",
+                                    payout_status if payout else None
+                                )
+
+                            with col4:
+                                div_growth = dividend_info.get("dividend_growth")
+                                st.metric(
+                                    "배당 성장률",
+                                    f"{div_growth:.1f}%" if div_growth else "N/A"
+                                )
+
+                            st.divider()
+
+                            # 배당락일 정보
+                            ex_date = dividend_info.get("ex_dividend_date")
+                            if ex_date:
+                                st.info(f"📅 다음 배당락일: **{ex_date}**")
+
+                            # 최근 배당 내역
+                            recent_divs = dividend_info.get("recent_dividends", [])
+                            if recent_divs:
+                                st.markdown("#### 📋 최근 배당 내역")
+
+                                # 배당 차트
+                                div_dates = [d['date'] for d in recent_divs]
+                                div_amounts = [d['amount'] for d in recent_divs]
+
+                                fig_div = go.Figure()
+                                fig_div.add_trace(go.Bar(
+                                    x=div_dates,
+                                    y=div_amounts,
+                                    marker_color='#10b981',
+                                    text=[f"${a:.2f}" for a in div_amounts],
+                                    textposition='outside'
+                                ))
+                                fig_div.update_layout(
+                                    title="배당금 추이",
+                                    xaxis_title="날짜",
+                                    yaxis_title="배당금",
+                                    template="plotly_white",
+                                    height=300
+                                )
+                                st.plotly_chart(fig_div, use_container_width=True)
+
+                            st.divider()
+
+                            # 배당 투자 팁
+                            st.markdown("#### 💡 배당 투자 가이드")
+                            if div_yield and div_yield > 4:
+                                st.success("✅ 고배당주: 안정적인 현금흐름을 원하는 투자자에게 적합")
+                            elif payout and payout > 70:
+                                st.warning("⚠️ 배당성향이 높아 지속 가능성 검토 필요")
+                            else:
+                                st.info("ℹ️ 배당과 성장의 균형을 갖춘 종목")
+
+                        else:
+                            st.warning("이 종목은 현재 배당금을 지급하지 않습니다.")
+                            st.markdown("""
+                            **무배당 종목 특징:**
+                            - 성장주: 수익을 재투자하여 기업 성장에 집중
+                            - 배당보다 주가 상승을 통한 수익 기대
+                            - 테크/성장 기업에서 일반적
+                            """)
+                    else:
+                        st.warning("배당 정보를 조회할 수 없습니다.")
+
+                # =============================================================
+                # 탭 6: 동종업계 비교 분석
+                # 같은 섹터/업종의 경쟁사와 주요 지표 비교
+                # =============================================================
+                with tab6:
                     st.subheader("🏆 동종업계 비교 분석")
 
                     with st.spinner("경쟁사 데이터 조회 중..."):
@@ -1020,7 +1493,7 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                         st.warning("동종업계 비교 데이터를 조회할 수 없습니다.")
 
                 # =============================================================
-                # 탭 6: 거시경제 지표
+                # 탭 7: 거시경제 지표
                 # 시장 전반의 상황을 파악하기 위한 매크로 데이터
                 # - 주요 지수 (S&P 500, NASDAQ, KOSPI 등)
                 # - VIX (공포지수)
@@ -1028,7 +1501,7 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                 # - 환율
                 # - 원자재 가격
                 # =============================================================
-                with tab6:
+                with tab7:
                     st.subheader("🌍 거시경제 지표")
 
                     with st.spinner("거시경제 데이터 조회 중..."):
@@ -1108,13 +1581,13 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                             )
 
                 # =============================================================
-                # 탭 7: 뉴스 감성 분석
+                # 탭 8: 뉴스 감성 분석
                 # NLP 기반 키워드 감성 분석으로 뉴스의 긍정/부정 판단
                 # - 종합 감성 점수 (-100 ~ +100)
                 # - 개별 기사별 감성 분석
                 # - 긍정/부정 키워드 하이라이트
                 # =============================================================
-                with tab7:
+                with tab8:
                     # 뉴스 감성 분석 도구 호출
                     news = analyze_company_news(company_name)
 

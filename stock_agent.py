@@ -1127,5 +1127,314 @@ def main():
 # CLI 모드 진입점
 # 터미널에서 직접 실행: python stock_agent.py
 # =============================================================================
+# =============================================================================
+# 도구 8: 시장 현황 대시보드 (Market Overview)
+# =============================================================================
+@tool
+def get_market_movers() -> dict:
+    """시장 현황을 조회합니다. 급등/급락 종목, 거래량 TOP 종목을 제공합니다.
+
+    포함 정보:
+    - 거래량 TOP 종목 (한국/미국)
+    - 급등 종목 (일간 상승률 상위)
+    - 급락 종목 (일간 하락률 상위)
+    - 52주 신고가/신저가 종목
+
+    Returns:
+        시장 현황 데이터 (거래량 TOP, 급등/급락 종목)
+    """
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    result = {
+        "volume_leaders": [],      # 거래량 TOP
+        "gainers": [],             # 급등 종목
+        "losers": [],              # 급락 종목
+        "near_52w_high": [],       # 52주 신고가 근접
+        "near_52w_low": [],        # 52주 신저가 근접
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }
+
+    # 주요 종목 리스트 (한국 + 미국)
+    tickers = [
+        # 한국 대표 종목
+        ("005930.KS", "삼성전자"), ("000660.KS", "SK하이닉스"),
+        ("035420.KS", "네이버"), ("035720.KS", "카카오"),
+        ("005380.KS", "현대차"), ("066570.KS", "LG전자"),
+        ("051910.KS", "LG화학"), ("006400.KS", "삼성SDI"),
+        ("003670.KS", "포스코퓨처엠"), ("373220.KS", "LG에너지솔루션"),
+        # 미국 대표 종목
+        ("AAPL", "Apple"), ("MSFT", "Microsoft"),
+        ("GOOGL", "Google"), ("AMZN", "Amazon"),
+        ("NVDA", "Nvidia"), ("TSLA", "Tesla"),
+        ("META", "Meta"), ("AMD", "AMD"),
+    ]
+
+    stock_data = []
+
+    for ticker, name in tickers:
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="5d")
+            info = stock.info
+
+            if hist.empty or len(hist) < 2:
+                continue
+
+            current = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2]
+            volume = hist['Volume'].iloc[-1]
+            change_pct = ((current - prev) / prev) * 100 if prev > 0 else 0
+
+            # 52주 고가/저가
+            high_52w = info.get('fiftyTwoWeekHigh', current)
+            low_52w = info.get('fiftyTwoWeekLow', current)
+
+            # 52주 범위 내 위치 (%)
+            range_52w = high_52w - low_52w
+            position_52w = ((current - low_52w) / range_52w * 100) if range_52w > 0 else 50
+
+            stock_data.append({
+                "ticker": ticker,
+                "name": name,
+                "price": round(current, 2),
+                "change_percent": round(change_pct, 2),
+                "volume": int(volume),
+                "high_52w": round(high_52w, 2),
+                "low_52w": round(low_52w, 2),
+                "position_52w": round(position_52w, 1)
+            })
+        except Exception:
+            continue
+
+    # 거래량 TOP 5
+    volume_sorted = sorted(stock_data, key=lambda x: x['volume'], reverse=True)
+    result["volume_leaders"] = volume_sorted[:5]
+
+    # 급등 TOP 5 (상승률 높은 순)
+    gainers_sorted = sorted([s for s in stock_data if s['change_percent'] > 0],
+                           key=lambda x: x['change_percent'], reverse=True)
+    result["gainers"] = gainers_sorted[:5]
+
+    # 급락 TOP 5 (하락률 높은 순)
+    losers_sorted = sorted([s for s in stock_data if s['change_percent'] < 0],
+                          key=lambda x: x['change_percent'])
+    result["losers"] = losers_sorted[:5]
+
+    # 52주 신고가 근접 (90% 이상)
+    near_high = [s for s in stock_data if s['position_52w'] >= 90]
+    result["near_52w_high"] = sorted(near_high, key=lambda x: x['position_52w'], reverse=True)[:5]
+
+    # 52주 신저가 근접 (10% 이하)
+    near_low = [s for s in stock_data if s['position_52w'] <= 10]
+    result["near_52w_low"] = sorted(near_low, key=lambda x: x['position_52w'])[:5]
+
+    return result
+
+
+# =============================================================================
+# 도구 9: 테마별 종목 (Theme Stocks)
+# =============================================================================
+THEME_STOCKS = {
+    "AI/반도체": {
+        "description": "인공지능 및 반도체 관련 종목",
+        "stocks": [
+            ("NVDA", "Nvidia", "AI GPU 선두"),
+            ("AMD", "AMD", "CPU/GPU"),
+            ("AVGO", "Broadcom", "AI 네트워킹"),
+            ("000660.KS", "SK하이닉스", "HBM 메모리"),
+            ("005930.KS", "삼성전자", "메모리 반도체"),
+        ]
+    },
+    "전기차/배터리": {
+        "description": "전기차 및 2차전지 관련 종목",
+        "stocks": [
+            ("TSLA", "Tesla", "전기차 선두"),
+            ("373220.KS", "LG에너지솔루션", "배터리"),
+            ("006400.KS", "삼성SDI", "배터리"),
+            ("051910.KS", "LG화학", "배터리 소재"),
+            ("003670.KS", "포스코퓨처엠", "양극재"),
+        ]
+    },
+    "빅테크": {
+        "description": "미국 대형 기술주",
+        "stocks": [
+            ("AAPL", "Apple", "아이폰/서비스"),
+            ("MSFT", "Microsoft", "클라우드/AI"),
+            ("GOOGL", "Google", "검색/클라우드"),
+            ("AMZN", "Amazon", "이커머스/AWS"),
+            ("META", "Meta", "SNS/메타버스"),
+        ]
+    },
+    "K-플랫폼": {
+        "description": "한국 플랫폼/인터넷 기업",
+        "stocks": [
+            ("035420.KS", "네이버", "검색/커머스"),
+            ("035720.KS", "카카오", "메신저/핀테크"),
+            ("263750.KS", "펄어비스", "게임"),
+            ("251270.KS", "넷마블", "게임"),
+            ("036570.KS", "엔씨소프트", "게임"),
+        ]
+    },
+    "배당주": {
+        "description": "고배당 우량주",
+        "stocks": [
+            ("KO", "Coca-Cola", "배당귀족"),
+            ("JNJ", "Johnson & Johnson", "헬스케어"),
+            ("PG", "Procter & Gamble", "소비재"),
+            ("017670.KS", "SK텔레콤", "통신"),
+            ("030200.KS", "KT", "통신"),
+        ]
+    }
+}
+
+
+@tool
+def get_theme_stocks(theme_name: str = None) -> dict:
+    """테마별 종목을 조회합니다.
+
+    사용 가능한 테마:
+    - AI/반도체: 인공지능, GPU, 메모리 반도체
+    - 전기차/배터리: 전기차, 2차전지, 배터리 소재
+    - 빅테크: 미국 대형 기술주 (FAANG+)
+    - K-플랫폼: 한국 인터넷/플랫폼 기업
+    - 배당주: 고배당 우량주
+
+    Args:
+        theme_name: 테마명 (None이면 전체 테마 목록 반환)
+
+    Returns:
+        테마별 종목 및 현재가 정보
+    """
+    if theme_name is None:
+        # 전체 테마 목록 반환
+        return {
+            "themes": list(THEME_STOCKS.keys()),
+            "descriptions": {k: v["description"] for k, v in THEME_STOCKS.items()}
+        }
+
+    # 테마 찾기 (부분 일치)
+    matched_theme = None
+    for theme_key in THEME_STOCKS:
+        if theme_name in theme_key or theme_key in theme_name:
+            matched_theme = theme_key
+            break
+
+    if not matched_theme:
+        return {"error": f"'{theme_name}' 테마를 찾을 수 없습니다. 사용 가능: {list(THEME_STOCKS.keys())}"}
+
+    theme_data = THEME_STOCKS[matched_theme]
+    stocks_with_price = []
+
+    for ticker, name, description in theme_data["stocks"]:
+        try:
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="2d")
+
+            if hist.empty:
+                continue
+
+            current = hist['Close'].iloc[-1]
+            prev = hist['Close'].iloc[-2] if len(hist) > 1 else current
+            change_pct = ((current - prev) / prev) * 100 if prev > 0 else 0
+
+            stocks_with_price.append({
+                "ticker": ticker,
+                "name": name,
+                "description": description,
+                "price": round(current, 2),
+                "change_percent": round(change_pct, 2)
+            })
+        except Exception:
+            stocks_with_price.append({
+                "ticker": ticker,
+                "name": name,
+                "description": description,
+                "price": None,
+                "change_percent": None
+            })
+
+    return {
+        "theme": matched_theme,
+        "description": theme_data["description"],
+        "stocks": stocks_with_price,
+        "stock_count": len(stocks_with_price)
+    }
+
+
+# =============================================================================
+# 도구 10: 배당금 정보 (Dividend Info)
+# =============================================================================
+@tool
+def get_dividend_info(company_name: str) -> dict:
+    """종목의 배당금 정보를 조회합니다.
+
+    포함 정보:
+    - 배당 수익률
+    - 주당 배당금
+    - 배당 지급 주기
+    - 최근 배당 내역
+    - 배당 성장률
+
+    Args:
+        company_name: 회사명
+
+    Returns:
+        배당금 관련 정보
+    """
+    ticker = get_ticker(company_name)
+
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        dividends = stock.dividends
+    except Exception as e:
+        return {"error": f"데이터 조회 실패: {str(e)}"}
+
+    # 배당 수익률
+    dividend_yield = info.get('dividendYield')
+    dividend_rate = info.get('dividendRate')
+    payout_ratio = info.get('payoutRatio')
+    ex_dividend_date = info.get('exDividendDate')
+
+    # 최근 배당 내역
+    recent_dividends = []
+    if dividends is not None and not dividends.empty:
+        for date, amount in dividends.tail(4).items():
+            recent_dividends.append({
+                "date": date.strftime("%Y-%m-%d"),
+                "amount": round(amount, 4)
+            })
+
+    # 배당 성장률 계산
+    dividend_growth = None
+    if len(recent_dividends) >= 2:
+        recent = recent_dividends[-1]['amount']
+        oldest = recent_dividends[0]['amount']
+        if oldest > 0:
+            years = len(recent_dividends) - 1
+            dividend_growth = ((recent / oldest) ** (1/years) - 1) * 100 if years > 0 else 0
+
+    # 배당락일 처리
+    ex_date_str = None
+    if ex_dividend_date:
+        try:
+            ex_date_str = datetime.fromtimestamp(ex_dividend_date).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    return {
+        "company": company_name,
+        "ticker": ticker,
+        "dividend_yield": round(dividend_yield * 100, 2) if dividend_yield else None,
+        "dividend_rate": round(dividend_rate, 4) if dividend_rate else None,
+        "payout_ratio": round(payout_ratio * 100, 1) if payout_ratio else None,
+        "ex_dividend_date": ex_date_str,
+        "recent_dividends": recent_dividends,
+        "dividend_growth": round(dividend_growth, 2) if dividend_growth else None,
+        "is_dividend_stock": dividend_yield is not None and dividend_yield > 0
+    }
+
+
 if __name__ == "__main__":
     main()

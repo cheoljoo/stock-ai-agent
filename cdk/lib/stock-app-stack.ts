@@ -96,17 +96,36 @@ export class StockAppStack extends cdk.Stack {
     // User Data for EC2
     const userData = ec2.UserData.forLinux();
     userData.addCommands(
+      'set -e',
+      'exec > >(tee /var/log/user-data.log) 2>&1',
       'yum update -y',
       'yum install -y python3.11 python3.11-pip unzip',
       'cd /home/ec2-user',
       `aws s3 cp s3://${deployBucket}/stock-app.zip .`,
-      'unzip -q stock-app.zip',
+      'unzip -o -q stock-app.zip',
       'python3.11 -m venv venv',
-      // Run in same shell to preserve venv activation
-      'cd /home/ec2-user && source venv/bin/activate && pip install -r requirements.txt',
-      'cd /home/ec2-user && source venv/bin/activate && nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 > /var/log/streamlit.log 2>&1 &',
-      // Wait for Streamlit to start
-      'sleep 10'
+      'source venv/bin/activate && pip install -r requirements.txt',
+      // Create systemd service for auto-start and restart on failure
+      'cat > /etc/systemd/system/streamlit.service << EOF',
+      '[Unit]',
+      'Description=Streamlit Stock App',
+      'After=network.target',
+      '',
+      '[Service]',
+      'Type=simple',
+      'User=root',
+      'WorkingDirectory=/home/ec2-user',
+      'ExecStart=/home/ec2-user/venv/bin/streamlit run app.py --server.port 8501 --server.address 0.0.0.0',
+      'Restart=always',
+      'RestartSec=3',
+      '',
+      '[Install]',
+      'WantedBy=multi-user.target',
+      'EOF',
+      'systemctl daemon-reload',
+      'systemctl enable streamlit',
+      'systemctl start streamlit',
+      'sleep 5'
     );
 
     // EC2 Instance

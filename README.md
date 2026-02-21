@@ -1,11 +1,16 @@
-# 주식분석 및 예측 어플리케이션 Agent 
+# 주식분석 및 예측 어플리케이션 Agent
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)
 ![AWS](https://img.shields.io/badge/AWS-Bedrock-FF9900?logo=amazon-aws&logoColor=white)
-![AWS](https://img.shields.io/badge/AWS-Kiro_CLI-232F3E?logo=amazon-aws&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-ECS_Fargate-FF9900?logo=amazon-aws&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Container-2496ED?logo=docker&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.0+-FF4B4B?logo=streamlit&logoColor=white)
 
 Strands Agents SDK와 Amazon Bedrock Claude 모델을 사용한 주식 정보 조회, 분석, 예측 Agent 입니다.
+
+**11가지 AI 도구**로 기술적 분석, 펀더멘털 분석, 뉴스 감성 분석, 동종업계 비교, 거시경제 지표, 배당금 정보까지 종합적인 투자 판단을 제공합니다.
+
+🌐 **Live Demo**: [https://d3ierd4g7thub6.cloudfront.net](https://d3ierd4g7thub6.cloudfront.net)
 
 ## 🎬 데모 영상
 
@@ -53,7 +58,7 @@ flowchart LR
 ![기술적 분석](images/fig3.png)
 
 ## 기능
- 
+
   1. 💰 현재가 조회 → 주가 데이터 수집
   2. 📊 기술적 분석 → RSI, MACD, 볼린저밴드 계산
   3. 💼 펀더멘털 분석 → P/E, ROE, 재무비율 분석
@@ -61,12 +66,18 @@ flowchart LR
   5. 🏆 동종업계 비교 → 경쟁사 지표 비교
   6. 🌍 거시경제 지표 → 금리, 환율, VIX 분석
   7. 📰 뉴스 감성 분석 → 최신 뉴스 NLP 분석
-  8. 🤖 AI 종합 판단 → Claude AI 분석 진행
+  8. 🔥 시장 현황 → 거래량 TOP, 급등/급락 종목
+  9. 🎯 테마별 종목 → AI/반도체, 전기차, 빅테크, 배당주
+  10. 💵 배당금 정보 → 배당수익률, 배당성향, 배당 내역
+  11. 🤖 AI 종합 판단 → Claude AI 분석 진행
 
 ### 🎯 주요 특징
 - **실시간 진행 상황 표시**: AI 분석 중 8단계 진행률 + 투자 팁 제공
 - **매수/매도/관망 신호**: 종합 분석 결과를 한눈에 확인
 - **NLP 뉴스 감성 분석**: Google News 기반 긍정/부정 점수화 (-100 ~ +100)
+- **테마별 종목 탐색**: AI/반도체, 전기차/배터리, 빅테크, K-플랫폼, 배당주
+- **시장 현황 대시보드**: 거래량 TOP, 급등/급락 종목 실시간 모니터링
+- **배당 투자 가이드**: 배당수익률, 배당성향, 배당 내역 분석
 - **한글 완벽 지원**: 모든 분석 결과를 한글로 친절하게 제공
 
 ## 기술 스택
@@ -244,6 +255,16 @@ aws ecs update-service --cluster StockAppCluster --service StockAppService --for
 - 예: "051910" (LG화학), "035720" (카카오)
 
 다른 기업은 티커 심볼을 직접 입력하면 조회 가능합니다.
+
+### 🎯 테마별 종목
+
+| 테마 | 종목 |
+|------|------|
+| AI/반도체 | 엔비디아(NVDA), AMD, TSMC, 삼성전자, SK하이닉스 |
+| 전기차/배터리 | 테슬라(TSLA), 리비안(RIVN), LG에너지솔루션, 삼성SDI |
+| 빅테크 | 애플(AAPL), 마이크로소프트(MSFT), 구글(GOOGL), 아마존(AMZN) |
+| K-플랫폼 | 네이버, 카카오, 쿠팡, 크래프톤 |
+| 배당주 | 코카콜라(KO), 존슨앤존슨(JNJ), 맥도날드(MCD), AT&T |
 
 ## 프로젝트 구조
 

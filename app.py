@@ -48,8 +48,15 @@ from stock_agent import (
 )
 
 # AWS Bedrock 연동
+import os
 from strands import Agent                    # AI 에이전트 클래스
 from strands.models import BedrockModel      # Bedrock 모델 래퍼
+
+# =============================================================================
+# AWS 설정 - 환경변수에서 리전 읽기 (기본값: us-east-1)
+# =============================================================================
+AWS_REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
+BEDROCK_MODEL_ID = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
 # =============================================================================
 # Streamlit 페이지 설정
@@ -303,8 +310,8 @@ def get_theme_css(is_dark: bool) -> str:
 # Bedrock 모델 초기화 (한 번만 생성)
 if 'bedrock_model' not in st.session_state:
     st.session_state.bedrock_model = BedrockModel(
-        model_id="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-        region_name="us-east-1"
+        model_id=BEDROCK_MODEL_ID,
+        region_name=AWS_REGION
     )
 
 # AI 에이전트 시스템 프롬프트 초기화
@@ -1033,8 +1040,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                                         if attempt > 0:
                                             # Bedrock 모델 재초기화
                                             st.session_state.bedrock_model = BedrockModel(
-                                                model_id="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-                                                region_name="us-east-1"
+                                                model_id=BEDROCK_MODEL_ID,
+                                                region_name=AWS_REGION
                                             )
                                             forecast_agent = Agent(
                                                 model=st.session_state.bedrock_model,
@@ -1819,8 +1826,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                         # Bedrock 모델 재초기화 (연결 문제 방지)
                         if attempt > 0:
                             st.session_state.bedrock_model = BedrockModel(
-                                model_id="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-                                region_name="us-east-1"
+                                model_id=BEDROCK_MODEL_ID,
+                                region_name=AWS_REGION
                             )
                             # 에이전트 재생성
                             retry_agent = Agent(

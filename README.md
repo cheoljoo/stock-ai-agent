@@ -112,8 +112,11 @@ aws configure
 # 또는 환경변수 설정
 export AWS_ACCESS_KEY_ID=your_access_key
 export AWS_SECRET_ACCESS_KEY=your_secret_key
-export AWS_DEFAULT_REGION=us-east-1
+export AWS_DEFAULT_REGION=us-east-1  # 기본값: us-east-1
 ```
+
+> **참고**: `AWS_DEFAULT_REGION` 환경변수를 설정하지 않으면 기본값으로 `us-east-1`이 사용됩니다.
+> Bedrock Claude 모델이 지원되는 리전을 사용해야 합니다.
 
 ## 실행 방법
 

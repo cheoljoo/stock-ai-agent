@@ -43,6 +43,12 @@ if sys.stdout.encoding != 'utf-8':
 if sys.stdin.encoding != 'utf-8':
     sys.stdin.reconfigure(encoding='utf-8')
 
+# =============================================================================
+# AWS 설정 - 환경변수에서 리전 읽기 (기본값: us-east-1)
+# =============================================================================
+AWS_REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
+BEDROCK_MODEL_ID = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+
 
 # =============================================================================
 # 회사명 → 티커 심볼 매핑 테이블
@@ -1008,8 +1014,8 @@ def main():
 
     # AWS Bedrock Claude 3.5 Sonnet 모델 초기화
     bedrock_model = BedrockModel(
-        model_id="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-        region_name="us-east-1"
+        model_id=BEDROCK_MODEL_ID,
+        region_name=AWS_REGION
     )
 
     # AI 에이전트 생성

@@ -49,13 +49,10 @@ flowchart LR
 ## 📸 스크린샷
 
 ### 메인 화면 - 주가 차트
-![메인 화면](images/fig1.png)
+![메인 화면](images/figure1.png)
 
 ### AI 기반 주가 예측
-![주가 예측](images/fig2.png)
-
-### 기술적 분석 및 뉴스
-![기술적 분석](images/fig3.png)
+![주가 예측](images/figure2.png)
 
 ## 기능
 

@@ -1014,8 +1014,40 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
 **중요: 예상주가는 반드시 숫자만 출력하세요 (단위 없이)**
 """
                                 )
-                                
-                                forecast_response = str(forecast_agent(f"{company_name} {forecast_period} 주가 예측"))
+
+                                # 재시도 로직이 포함된 예측 실행
+                                forecast_response = None
+                                max_retries = 3
+                                for attempt in range(max_retries):
+                                    try:
+                                        if attempt > 0:
+                                            # Bedrock 모델 재초기화
+                                            st.session_state.bedrock_model = BedrockModel(
+                                                model_id="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+                                                region_name="us-east-1"
+                                            )
+                                            forecast_agent = Agent(
+                                                model=st.session_state.bedrock_model,
+                                                tools=[],
+                                                system_prompt=forecast_agent.system_prompt if hasattr(forecast_agent, 'system_prompt') else ""
+                                            )
+                                        forecast_response = str(forecast_agent(f"{company_name} {forecast_period} 주가 예측"))
+                                        break
+                                    except (BrokenPipeError, ConnectionError, OSError) as e:
+                                        if attempt < max_retries - 1:
+                                            import time as time_module
+                                            time_module.sleep(2 * (attempt + 1))
+                                            continue
+                                        raise e
+                                    except Exception as e:
+                                        if "Broken pipe" in str(e) and attempt < max_retries - 1:
+                                            import time as time_module
+                                            time_module.sleep(2 * (attempt + 1))
+                                            continue
+                                        raise e
+
+                                if forecast_response is None:
+                                    raise Exception("예측 생성 실패")
 
                                 # 예측 주가 추출
                                 price_match = re.search(r'예상주가:\s*([0-9,.]+)', forecast_response)
@@ -1036,7 +1068,11 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                                 st.session_state.forecast_ticker = ticker
 
                             except Exception as e:
-                                st.error(f"예측 중 오류 발생: {str(e)}")
+                                error_msg = str(e)
+                                if "Broken pipe" in error_msg:
+                                    st.error("⚠️ AI 서버 연결이 불안정합니다. 잠시 후 다시 시도해주세요.")
+                                else:
+                                    st.error(f"예측 중 오류 발생: {error_msg}")
                                 st.session_state.forecast_result = None
 
                     # session_state에 저장된 예측 결과 표시 (같은 종목일 때만)
@@ -1764,11 +1800,50 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
             result_queue = queue.Queue()
 
             def run_agent():
-                try:
-                    result = agent(user_input)
-                    result_queue.put(("success", result))
-                except Exception as e:
-                    result_queue.put(("error", str(e)))
+                """AI 에이전트 실행 (재시도 로직 포함)"""
+                max_retries = 3
+                retry_delay = 2  # 초
+
+                for attempt in range(max_retries):
+                    try:
+                        # Bedrock 모델 재초기화 (연결 문제 방지)
+                        if attempt > 0:
+                            st.session_state.bedrock_model = BedrockModel(
+                                model_id="us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+                                region_name="us-east-1"
+                            )
+                            # 에이전트 재생성
+                            retry_agent = Agent(
+                                model=st.session_state.bedrock_model,
+                                tools=[
+                                    get_stock_price,
+                                    analyze_stock_trend,
+                                    get_fundamental_analysis,
+                                    get_institutional_holders,
+                                    get_peer_comparison,
+                                    get_macro_indicators,
+                                    analyze_company_news
+                                ],
+                                system_prompt=st.session_state.system_prompt
+                            )
+                            result = retry_agent(user_input)
+                        else:
+                            result = agent(user_input)
+
+                        result_queue.put(("success", result))
+                        return
+                    except (BrokenPipeError, ConnectionError, OSError) as e:
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay * (attempt + 1))  # 지수 백오프
+                            continue
+                        result_queue.put(("error", f"연결 오류 (재시도 {max_retries}회 실패): {str(e)}"))
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "Broken pipe" in error_msg or "Connection" in error_msg:
+                            if attempt < max_retries - 1:
+                                time.sleep(retry_delay * (attempt + 1))
+                                continue
+                        result_queue.put(("error", error_msg))
 
             # 백그라운드에서 AI 분석 실행
             agent_thread = threading.Thread(target=run_agent)
@@ -1798,7 +1873,12 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
             # 결과 가져오기
             status, result = result_queue.get()
             if status == "error":
-                st.error(f"분석 중 오류 발생: {result}")
+                error_msg = str(result)
+                if "Broken pipe" in error_msg or "연결 오류" in error_msg:
+                    st.error("⚠️ AI 서버 연결이 불안정합니다. 잠시 후 다시 '분석하기' 버튼을 클릭해주세요.")
+                    st.info("💡 팁: 네트워크 상태를 확인하거나, 페이지를 새로고침 후 다시 시도해보세요.")
+                else:
+                    st.error(f"분석 중 오류 발생: {error_msg}")
                 response = ""
             else:
                 response = result

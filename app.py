@@ -674,6 +674,7 @@ with col1:
             if st.button(stock, key=f"quick_{stock}", use_container_width=True):
                 st.session_state.quick_stock_selected = stock
                 st.session_state.auto_analyze = True
+                st.session_state.analyzed_input = stock  # 검색어 저장 (재실행 시 유지)
                 st.rerun()
 
 with col2:
@@ -715,11 +716,20 @@ period = period_map[period_option]
 # 분석 실행 메인 로직
 # 버튼 클릭 또는 자동 분석 플래그가 설정된 경우 실행
 # =============================================================================
-if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
+# 분석하기 버튼 클릭 시 auto_analyze 플래그 설정 및 검색어 저장
+if analyze_button and user_input:
+    st.session_state.auto_analyze = True
+    st.session_state.analyzed_input = user_input
+
+# 현재 분석 대상 결정 (현재 입력값 또는 이전 분석값)
+current_input = user_input or st.session_state.get('analyzed_input', '')
+
+if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
+    # 분석 중인 검색어를 항상 session_state에 저장 (탭 내 버튼 클릭 시에도 유지)
+    st.session_state.analyzed_input = current_input
+
     with st.spinner("분석 중..."):  # 로딩 스피너 표시
         try:
-            # 자동 분석 플래그 설정 (기간 변경 시 자동 재분석용)
-            st.session_state.auto_analyze = True
             # 빠른 검색 선택값 초기화
             st.session_state.quick_stock_selected = ""
 
@@ -728,12 +738,12 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
             # 불필요한 키워드를 제거하여 순수 회사명만 추출
             # ---------------------------------------------------------------------
             keywords = ['주가', '분석', '매수', '매도', '타이밍', '예측', '전망', '추천']
-            company_name = user_input
+            company_name = current_input
             for keyword in keywords:
                 company_name = company_name.replace(keyword, '').strip()
             # 빈 문자열이면 원본의 첫 단어 사용
             if not company_name:
-                company_name = user_input.split()[0]
+                company_name = current_input.split()[0]
 
             # 회사명을 티커 심볼로 변환 (예: "삼성전자" → "005930.KS")
             ticker = get_ticker(company_name)
@@ -1066,8 +1076,6 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                                     'df': df.tail(30).copy()  # 차트용 데이터
                                 }
                                 st.session_state.forecast_ticker = ticker
-                                # 결과 저장 후 페이지 새로고침하여 결과 표시
-                                st.rerun()
 
                             except Exception as e:
                                 error_msg = str(e)
@@ -1077,8 +1085,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                                     st.error(f"예측 중 오류 발생: {error_msg}")
                                 st.session_state.forecast_result = None
 
-                    # session_state에 저장된 예측 결과 표시 (같은 종목일 때만)
-                    if st.session_state.forecast_result and st.session_state.forecast_ticker == ticker:
+                    # session_state에 저장된 예측 결과 표시
+                    if st.session_state.get('forecast_result') and st.session_state.get('forecast_ticker') == ticker:
                         result = st.session_state.forecast_result
                         predicted_price = result['predicted_price']
                         current_price = result['current_price']
@@ -1172,7 +1180,7 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
 
                         st.divider()
                         st.caption("💡 이 예측은 현재 기술적 지표, 최근 뉴스, 시장 상황을 종합한 AI 분석입니다.")
-                    elif not st.session_state.forecast_result:
+                    else:
                         st.info("👆 버튼을 클릭하여 AI 기반 주가 예측을 생성하세요.")
                 
                 # =============================================================
@@ -1828,9 +1836,9 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                                 ],
                                 system_prompt=st.session_state.system_prompt
                             )
-                            result = retry_agent(user_input)
+                            result = retry_agent(current_input)
                         else:
-                            result = agent(user_input)
+                            result = agent(current_input)
 
                         result_queue.put(("success", result))
                         return
@@ -1918,7 +1926,7 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
 
             # 조회 히스토리에 저장 (최근 검색 기록 유지)
             st.session_state.history.append({
-                "query": user_input,
+                "query": current_input,
                 "response": str(response)
             })
             

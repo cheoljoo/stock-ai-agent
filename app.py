@@ -1066,6 +1066,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and user_input:
                                     'df': df.tail(30).copy()  # 차트용 데이터
                                 }
                                 st.session_state.forecast_ticker = ticker
+                                # 결과 저장 후 페이지 새로고침하여 결과 표시
+                                st.rerun()
 
                             except Exception as e:
                                 error_msg = str(e)

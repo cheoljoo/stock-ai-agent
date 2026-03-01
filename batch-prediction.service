@@ -1,0 +1,15 @@
+[Unit]
+Description=Stock Prediction Batch Job
+After=network.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+WorkingDirectory=/home/ec2-user/20260208-stock-app-kiro-cli
+ExecStart=/home/ec2-user/20260208-stock-app-kiro-cli/venv/bin/python /home/ec2-user/20260208-stock-app-kiro-cli/batch_prediction.py
+StandardOutput=append:/home/ec2-user/20260208-stock-app-kiro-cli/logs/batch.log
+StandardError=append:/home/ec2-user/20260208-stock-app-kiro-cli/logs/batch.log
+Environment=AWS_DEFAULT_REGION=us-east-1
+
+[Install]
+WantedBy=multi-user.target

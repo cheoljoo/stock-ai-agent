@@ -43,6 +43,9 @@ from stock_agent import (
     get_market_movers,          # 시장 현황 (급등/급락/거래량)
     get_theme_stocks,           # 테마별 종목
     get_dividend_info,          # 배당금 정보
+    get_prophet_forecast,       # Prophet 시계열 예측
+    get_short_term_indicators,  # 단기 기술적 지표
+    get_backtest_accuracy,      # 백테스팅 정확도
     THEME_STOCKS,               # 테마 데이터
     TICKER_MAP                  # 티커 매핑 (자동완성용)
 )
@@ -51,6 +54,110 @@ from stock_agent import (
 import os
 from strands import Agent                    # AI 에이전트 클래스
 from strands.models import BedrockModel      # Bedrock 모델 래퍼
+from concurrent.futures import ThreadPoolExecutor, as_completed  # 병렬 처리
+
+# 예측 기록 추적 모듈
+from prediction_tracker import (
+    save_prediction,
+    get_prediction_stats,
+    get_recent_predictions,
+    update_pending_predictions,
+    get_accuracy_by_stock,
+    get_accuracy_by_period_and_stock,
+    get_all_predictions_for_dashboard,
+    get_daily_accuracy_trend
+)
+
+# 배치 예측 대상 종목 (대시보드에서 사용)
+from batch_prediction import BATCH_STOCKS
+
+# =============================================================================
+# 캐싱 래퍼 함수들 - yfinance API 호출 최소화
+# TTL(Time To Live): 5분 동안 캐시 유지
+# =============================================================================
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_stock_price(company_name: str) -> dict:
+    """현재가 조회 (캐싱)"""
+    return get_stock_price(company_name)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_analyze_stock_trend(company_name: str, period: str) -> dict:
+    """기술적 분석 (캐싱)"""
+    return analyze_stock_trend(company_name, period)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_fundamental_analysis(company_name: str) -> dict:
+    """기본적 분석 (캐싱)"""
+    return get_fundamental_analysis(company_name)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_institutional_holders(company_name: str) -> dict:
+    """기관 보유 현황 (캐싱)"""
+    return get_institutional_holders(company_name)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_peer_comparison(company_name: str) -> dict:
+    """동종업계 비교 (캐싱)"""
+    return get_peer_comparison(company_name)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_macro_indicators() -> dict:
+    """거시경제 지표 (캐싱)"""
+    return get_macro_indicators()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_analyze_company_news(company_name: str) -> dict:
+    """뉴스 감성 분석 (캐싱)"""
+    return analyze_company_news(company_name)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_dividend_info(company_name: str) -> dict:
+    """배당금 정보 (캐싱)"""
+    return get_dividend_info(company_name)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_prophet_forecast(company_name: str, forecast_days: int) -> dict:
+    """Prophet 예측 (캐싱)"""
+    return get_prophet_forecast(company_name, forecast_days)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_short_term_indicators(company_name: str) -> dict:
+    """단기 지표 (캐싱)"""
+    return get_short_term_indicators(company_name)
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_get_backtest_accuracy(company_name: str, lookback_days: int) -> dict:
+    """백테스팅 (캐싱 - 10분)"""
+    return get_backtest_accuracy(company_name, lookback_days)
+
+def load_all_data_parallel(company_name: str, period: str) -> dict:
+    """모든 분석 데이터를 병렬로 로드 (속도 3-4배 향상)"""
+    results = {}
+
+    # 병렬 실행할 태스크 정의
+    tasks = {
+        'price': lambda: cached_get_stock_price(company_name),
+        'analysis': lambda: cached_analyze_stock_trend(company_name, period),
+        'fundamental': lambda: cached_get_fundamental_analysis(company_name),
+        'holders': lambda: cached_get_institutional_holders(company_name),
+        'peer': lambda: cached_get_peer_comparison(company_name),
+        'macro': lambda: cached_get_macro_indicators(),
+        'news': lambda: cached_analyze_company_news(company_name),
+        'dividend': lambda: cached_get_dividend_info(company_name),
+        'short_term': lambda: cached_get_short_term_indicators(company_name),
+    }
+
+    # ThreadPoolExecutor로 병렬 실행
+    with ThreadPoolExecutor(max_workers=9) as executor:
+        future_to_key = {executor.submit(task): key for key, task in tasks.items()}
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                results[key] = future.result()
+            except Exception as e:
+                results[key] = {"error": str(e)}
+
+    return results
 
 # =============================================================================
 # AWS 설정 - 환경변수에서 리전 읽기 (기본값: us-east-1)
@@ -523,6 +630,26 @@ with st.sidebar:
     st.divider()
 
     # -------------------------------------------------------------------------
+    # 예측 정확도 대시보드 버튼 (최상단)
+    # -------------------------------------------------------------------------
+    st.header("📊 예측 대시보드")
+    if st.button("🎯 정확도 대시보드 보기", use_container_width=True, type="primary"):
+        st.session_state.show_dashboard = True
+        st.rerun()
+
+    # 배치 예측 수동 실행 버튼
+    if st.button("🔄 배치 예측 실행", use_container_width=True):
+        with st.spinner("배치 예측 실행 중..."):
+            try:
+                from batch_prediction import run_batch_predictions
+                results = run_batch_predictions()
+                st.success(f"✅ 배치 예측 완료: 성공 {results['success']}건")
+            except Exception as e:
+                st.error(f"배치 예측 실패: {e}")
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
     # 시장 현황 대시보드 (TOSS 스타일)
     # -------------------------------------------------------------------------
     st.header("📊 시장 현황")
@@ -626,11 +753,334 @@ with st.sidebar:
         with col1:
             if st.button(stock, key=f"watch_{stock}", use_container_width=True):
                 st.session_state.company_input = stock
+                st.session_state.show_dashboard = False
                 st.rerun()
         with col2:
             if st.button("🗑️", key=f"del_{stock}"):
                 st.session_state.watchlist.remove(stock)
                 st.rerun()
+
+# =============================================================================
+# 대시보드 뷰 모드 초기화
+# =============================================================================
+if 'show_dashboard' not in st.session_state:
+    st.session_state.show_dashboard = False
+
+# =============================================================================
+# 예측 정확도 대시보드 (별도 뷰)
+# =============================================================================
+if st.session_state.show_dashboard:
+    st.title("📊 예측 정확도 대시보드")
+
+    # 대시보드 닫기 버튼
+    if st.button("← 주식 분석으로 돌아가기"):
+        st.session_state.show_dashboard = False
+        st.rerun()
+
+    st.markdown("---")
+
+    # 대기 중인 예측 업데이트
+    with st.spinner("예측 결과 업데이트 중..."):
+        try:
+            updated = update_pending_predictions()
+            if updated > 0:
+                st.success(f"✅ {updated}건의 예측 결과가 업데이트되었습니다!")
+        except Exception:
+            pass
+
+    # -------------------------------------------------------------------------
+    # 탭: 종합 통계 / 종목별 분석 / 예측 기록
+    # -------------------------------------------------------------------------
+    dash_tab1, dash_tab2, dash_tab3 = st.tabs(["📈 종합 통계", "🏢 종목별 분석", "📋 예측 기록"])
+
+    # =========================================================================
+    # 탭 1: 종합 통계
+    # =========================================================================
+    with dash_tab1:
+        st.subheader("📈 전체 예측 정확도")
+
+        # 전체 통계 가져오기
+        overall_stats = get_prediction_stats(days=90)
+        summary = overall_stats['summary']
+
+        # 요약 카드
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("총 예측", f"{summary['total']}건")
+        with col2:
+            st.metric("검증 완료", f"{summary['verified']}건")
+        with col3:
+            st.metric("방향 적중", f"{summary['correct']}건")
+        with col4:
+            acc = summary['direction_accuracy']
+            delta = f"{acc - 50:.1f}%" if acc > 0 else None
+            st.metric("적중률", f"{acc}%", delta=delta)
+
+        st.markdown("---")
+
+        # 기간별 정확도
+        st.subheader("📊 예측 기간별 정확도")
+        period_stats = overall_stats.get('period_stats', [])
+
+        if period_stats:
+            period_df = pd.DataFrame(period_stats)
+            period_df = period_df.rename(columns={
+                'period': '예측기간',
+                'total': '총예측',
+                'verified': '검증완료',
+                'correct': '적중',
+                'direction_accuracy': '적중률(%)',
+                'avg_error': '평균오차(%)'
+            })
+            st.dataframe(period_df, hide_index=True, use_container_width=True)
+
+            # 기간별 적중률 차트
+            if len(period_stats) > 1:
+                fig_period = go.Figure()
+                fig_period.add_trace(go.Bar(
+                    x=[p['period'] for p in period_stats],
+                    y=[p['direction_accuracy'] for p in period_stats],
+                    marker_color=['#10b981' if p['direction_accuracy'] >= 50 else '#ef4444' for p in period_stats],
+                    text=[f"{p['direction_accuracy']}%" for p in period_stats],
+                    textposition='outside'
+                ))
+                fig_period.update_layout(
+                    title="예측 기간별 적중률",
+                    yaxis_title="적중률 (%)",
+                    yaxis_range=[0, 100],
+                    template="plotly_white",
+                    height=300
+                )
+                fig_period.add_hline(y=50, line_dash="dash", line_color="gray",
+                                     annotation_text="기준선 (50%)")
+                st.plotly_chart(fig_period, use_container_width=True)
+        else:
+            st.info("아직 예측 데이터가 없습니다. 배치 예측을 실행하거나 개별 종목 예측을 생성해주세요.")
+
+        # 일별 추세 차트
+        st.subheader("📅 일별 예측 추세")
+        daily_trend = get_daily_accuracy_trend(days=30)
+
+        if daily_trend and any(d['accuracy'] is not None for d in daily_trend):
+            fig_trend = go.Figure()
+            dates = [d['date'] for d in daily_trend]
+            accuracies = [d['accuracy'] for d in daily_trend]
+            totals = [d['total'] for d in daily_trend]
+
+            fig_trend.add_trace(go.Scatter(
+                x=dates,
+                y=accuracies,
+                mode='lines+markers',
+                name='적중률',
+                line=dict(color='#3b82f6', width=2),
+                marker=dict(size=8)
+            ))
+
+            fig_trend.add_trace(go.Bar(
+                x=dates,
+                y=totals,
+                name='예측 수',
+                marker_color='rgba(59, 130, 246, 0.3)',
+                yaxis='y2'
+            ))
+
+            fig_trend.update_layout(
+                title="일별 예측 현황",
+                yaxis=dict(title="적중률 (%)", range=[0, 100]),
+                yaxis2=dict(title="예측 수", overlaying='y', side='right'),
+                template="plotly_white",
+                height=350,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02)
+            )
+            fig_trend.add_hline(y=50, line_dash="dash", line_color="gray")
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info("일별 추세 데이터가 아직 없습니다.")
+
+    # =========================================================================
+    # 탭 2: 종목별 분석
+    # =========================================================================
+    with dash_tab2:
+        st.subheader("🏢 모니터링 대상 종목")
+
+        # 대상 종목 표시
+        st.markdown("**배치 예측 대상 종목:**")
+        stock_cols = st.columns(4)
+        for i, stock in enumerate(BATCH_STOCKS):
+            with stock_cols[i % 4]:
+                market_flag = "🇰🇷" if stock['market'] == 'KR' else "🇺🇸"
+                st.caption(f"{market_flag} {stock['name']}")
+
+        st.markdown("---")
+
+        # 종목별 정확도 테이블
+        st.subheader("📊 종목별 예측 정확도")
+        stock_accuracy = get_accuracy_by_stock(days=90)
+
+        if stock_accuracy:
+            stock_df = pd.DataFrame(stock_accuracy)
+            stock_df = stock_df.rename(columns={
+                'company_name': '종목명',
+                'total': '총예측',
+                'verified': '검증완료',
+                'correct': '적중',
+                'direction_accuracy': '적중률(%)',
+                'avg_error': '평균오차(%)'
+            })
+            # ticker 컬럼 제거
+            if 'ticker' in stock_df.columns:
+                stock_df = stock_df.drop(columns=['ticker'])
+            if 'prophet_avg_error' in stock_df.columns:
+                stock_df = stock_df.drop(columns=['prophet_avg_error'])
+
+            st.dataframe(stock_df, hide_index=True, use_container_width=True)
+
+            # 종목별 적중률 차트
+            fig_stock = go.Figure()
+            fig_stock.add_trace(go.Bar(
+                x=[s['company_name'] for s in stock_accuracy],
+                y=[s['direction_accuracy'] for s in stock_accuracy],
+                marker_color=['#10b981' if s['direction_accuracy'] >= 50 else '#ef4444' for s in stock_accuracy],
+                text=[f"{s['direction_accuracy']}%" for s in stock_accuracy],
+                textposition='outside'
+            ))
+            fig_stock.update_layout(
+                title="종목별 예측 적중률",
+                yaxis_title="적중률 (%)",
+                yaxis_range=[0, 100],
+                template="plotly_white",
+                height=400
+            )
+            fig_stock.add_hline(y=50, line_dash="dash", line_color="gray",
+                               annotation_text="기준선 (50%)")
+            st.plotly_chart(fig_stock, use_container_width=True)
+        else:
+            st.info("아직 종목별 예측 데이터가 없습니다.")
+
+        # 종목+기간별 상세
+        st.markdown("---")
+        st.subheader("📋 종목별 × 기간별 상세")
+        period_stock_accuracy = get_accuracy_by_period_and_stock(days=90)
+
+        if period_stock_accuracy:
+            detail_df = pd.DataFrame(period_stock_accuracy)
+            detail_df = detail_df.rename(columns={
+                'company_name': '종목명',
+                'forecast_period': '예측기간',
+                'total': '총예측',
+                'verified': '검증완료',
+                'correct': '적중',
+                'direction_accuracy': '적중률(%)',
+                'avg_error': '평균오차(%)'
+            })
+            if 'ticker' in detail_df.columns:
+                detail_df = detail_df.drop(columns=['ticker'])
+
+            st.dataframe(detail_df, hide_index=True, use_container_width=True)
+        else:
+            st.info("상세 데이터가 없습니다.")
+
+    # =========================================================================
+    # 탭 3: 예측 기록
+    # =========================================================================
+    with dash_tab3:
+        st.subheader("📋 최근 예측 기록")
+
+        all_predictions = get_all_predictions_for_dashboard(limit=100)
+
+        if all_predictions:
+            # 필터링 옵션
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                filter_stock = st.selectbox(
+                    "종목 필터",
+                    ["전체"] + list(set(p['company_name'] for p in all_predictions))
+                )
+            with col2:
+                filter_period = st.selectbox(
+                    "기간 필터",
+                    ["전체", "1일", "7일", "1개월", "3개월", "6개월"]
+                )
+            with col3:
+                filter_status = st.selectbox(
+                    "상태 필터",
+                    ["전체", "검증완료", "대기중"]
+                )
+
+            # 필터 적용
+            filtered = all_predictions
+            if filter_stock != "전체":
+                filtered = [p for p in filtered if p['company_name'] == filter_stock]
+            if filter_period != "전체":
+                filtered = [p for p in filtered if p['forecast_period'] == filter_period]
+            if filter_status != "전체":
+                filtered = [p for p in filtered if p['status'] == filter_status]
+
+            st.caption(f"총 {len(filtered)}건")
+
+            # 예측 기록 테이블
+            for pred in filtered[:50]:  # 최대 50개만 표시
+                with st.container():
+                    # 상태 아이콘
+                    if pred['is_correct'] is True:
+                        status_icon = "✅"
+                        status_color = "green"
+                    elif pred['is_correct'] is False:
+                        status_icon = "❌"
+                        status_color = "red"
+                    else:
+                        status_icon = "⏳"
+                        status_color = "gray"
+
+                    # 통화 기호
+                    currency = "₩" if ".KS" in pred['ticker'] else "$"
+
+                    cols = st.columns([2, 1, 2, 2, 2, 1])
+
+                    with cols[0]:
+                        st.markdown(f"**{pred['company_name']}**")
+                        st.caption(f"{pred['forecast_period']} | {pred['created_at'][:10]}")
+
+                    with cols[1]:
+                        st.markdown(f"현재가")
+                        st.markdown(f"{currency}{pred['current_price']:,.0f}")
+
+                    with cols[2]:
+                        st.markdown(f"예측가 ({pred['pred_direction'] or '-'})")
+                        if pred['predicted_price']:
+                            change = ((pred['predicted_price'] - pred['current_price']) / pred['current_price']) * 100
+                            st.markdown(f"{currency}{pred['predicted_price']:,.0f} ({change:+.1f}%)")
+                        else:
+                            st.markdown("-")
+
+                    with cols[3]:
+                        st.markdown(f"실제가 ({pred['actual_direction'] or '-'})")
+                        if pred['actual_price']:
+                            actual_change = ((pred['actual_price'] - pred['current_price']) / pred['current_price']) * 100
+                            st.markdown(f"{currency}{pred['actual_price']:,.0f} ({actual_change:+.1f}%)")
+                        else:
+                            st.markdown("대기중")
+
+                    with cols[4]:
+                        if pred['error_percent'] is not None:
+                            st.markdown(f"오차율")
+                            st.markdown(f"{pred['error_percent']:+.2f}%")
+                        else:
+                            st.markdown("")
+
+                    with cols[5]:
+                        st.markdown(f":{status_color}[{status_icon}]")
+
+                    st.divider()
+        else:
+            st.info("아직 예측 기록이 없습니다. 종목 분석에서 예측을 생성하거나 배치 예측을 실행해주세요.")
+
+    # 대시보드 푸터
+    st.markdown("---")
+    st.caption("💡 예측 정확도는 시간이 지남에 따라 자동으로 업데이트됩니다.")
+
+    # 대시보드 표시 중이면 여기서 중단
+    st.stop()
 
 # =============================================================================
 # 메인 입력 영역 (검색 자동완성 포함)
@@ -765,8 +1215,13 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
             # ---------------------------------------------------------------------
             stock = yf.Ticker(ticker)
             df = stock.history(period=period)  # 선택된 기간의 OHLCV 데이터
-            
+
             if not df.empty:
+                # -----------------------------------------------------------------
+                # ⚡ 모든 분석 데이터 병렬 로딩 (속도 3-4배 향상)
+                # -----------------------------------------------------------------
+                preloaded_data = load_all_data_parallel(company_name, period)
+                st.session_state.preloaded_data = preloaded_data
                 # -----------------------------------------------------------------
                 # 8개 탭으로 분석 결과 표시 (배당금 탭 추가)
                 # -----------------------------------------------------------------
@@ -887,11 +1342,11 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                         pass
                 
                 # =============================================================
-                # 탭 2: AI 기반 주가 예측
-                # Claude AI를 활용하여 기술적/기본적 분석 데이터를 종합한 예측
+                # 탭 2: AI + Prophet 앙상블 주가 예측
+                # Claude AI와 Prophet 시계열 모델을 결합한 고정확도 예측
                 # =============================================================
                 with tab2:
-                    st.subheader("🔮 AI 주가 예측")
+                    st.subheader("🔮 AI + Prophet 앙상블 예측")
 
                     # 예측 결과를 저장할 session_state 초기화
                     if 'forecast_result' not in st.session_state:
@@ -907,37 +1362,63 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                     )
 
                     # AI 예측 생성 버튼
-                    generate_forecast = st.button("🤖 AI 예측 생성", use_container_width=True)
+                    generate_forecast = st.button("🤖 앙상블 예측 생성", use_container_width=True)
 
                     # 버튼 클릭 시 예측 실행
                     if generate_forecast:
-                        with st.spinner("AI가 종합 분석 중..."):
+                        with st.spinner("AI + Prophet 앙상블 예측 생성 중..."):
                             try:
                                 # ---------------------------------------------------------
-                                # AI 예측을 위한 데이터 수집
-                                # 모든 도구를 호출하여 종합 데이터를 수집
+                                # 1단계: Prophet 시계열 예측
                                 # ---------------------------------------------------------
+                                period_days_map = {"1일": 1, "7일": 7, "1개월": 30, "3개월": 90, "6개월": 180}
+                                forecast_days = period_days_map.get(forecast_period, 1)
+
+                                # 캐싱된 함수 사용 (속도 향상)
+                                prophet_result = cached_get_prophet_forecast(company_name, forecast_days)
+                                prophet_price = prophet_result.get('predicted_price') if 'error' not in prophet_result else None
+                                prophet_confidence = prophet_result.get('confidence', '중간') if 'error' not in prophet_result else '낮음'
+                                prophet_trend = prophet_result.get('trend', '보합') if 'error' not in prophet_result else '보합'
+
+                                # ---------------------------------------------------------
+                                # 2단계: 단기 기술적 지표 (병렬 로딩된 데이터 사용)
+                                # ---------------------------------------------------------
+                                short_term = st.session_state.preloaded_data.get('short_term', {})
+                                short_term_signal = short_term.get('short_term_signal', '중립') if 'error' not in short_term else '중립'
+                                bullish_ratio = short_term.get('bullish_ratio', 50) if 'error' not in short_term else 50
+
+                                # ---------------------------------------------------------
+                                # 3단계: 백테스팅 정확도 (1일 예측 시에만, 캐싱 사용)
+                                # ---------------------------------------------------------
+                                backtest_result = None
+                                if forecast_period == "1일":
+                                    backtest_result = cached_get_backtest_accuracy(company_name, 30)
+
+                                # ---------------------------------------------------------
+                                # 4단계: 병렬 로딩된 데이터 사용 (속도 향상)
+                                # ---------------------------------------------------------
+                                preloaded = st.session_state.preloaded_data
 
                                 # 기술적 분석 데이터 (RSI, MACD, 볼린저밴드 등)
-                                analysis = analyze_stock_trend(company_name, period)
+                                analysis = preloaded.get('analysis', {})
 
                                 # 뉴스 감성 분석 데이터
-                                news = analyze_company_news(company_name)
+                                news = preloaded.get('news', {})
 
                                 # 현재 주가 정보
-                                price_info = get_stock_price(company_name)
+                                price_info = preloaded.get('price', {})
 
                                 # 기본적 분석 데이터 (밸류에이션, 수익성 등)
-                                fundamental = get_fundamental_analysis(company_name)
+                                fundamental = preloaded.get('fundamental', {})
 
                                 # 기관/내부자 보유 현황
-                                holders = get_institutional_holders(company_name)
+                                holders = preloaded.get('holders', {})
 
                                 # 동종업계 비교 데이터
-                                peer_data = get_peer_comparison(company_name)
+                                peer_data = preloaded.get('peer', {})
 
                                 # 거시경제 지표 (지수, VIX, 금리, 환율)
-                                macro = get_macro_indicators()
+                                macro = preloaded.get('macro', {})
 
                                 current_price = float(price_info.get('current_price', 0))
 
@@ -947,20 +1428,46 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                                 health = fundamental.get('financial_health', {}) if 'error' not in fundamental else {}
                                 growth = fundamental.get('growth', {}) if 'error' not in fundamental else {}
 
-                                # AI 예측 프롬프트
+                                # AI 예측 프롬프트 (Prophet 결과 + 단기 지표 포함)
+                                backtest_info = ""
+                                if backtest_result and 'error' not in backtest_result:
+                                    backtest_info = f"""
+**백테스팅 결과 (과거 예측 정확도):**
+- 테스트 기간: 최근 {backtest_result.get('test_period_days')}일
+- 방향 예측 정확도: {backtest_result.get('direction_accuracy')}%
+- 평균 오차율 (MAPE): {backtest_result.get('mape')}%
+- 예측 신뢰도 등급: {backtest_result.get('reliability')}
+"""
+
                                 forecast_agent = Agent(
                                     model=st.session_state.bedrock_model,
                                     tools=[],
-                                    system_prompt=f"""당신은 전문 주식 애널리스트입니다.
+                                    system_prompt=f"""당신은 전문 주식 애널리스트입니다. 앙상블 예측을 수행합니다.
 
 다음 데이터를 종합 분석하여 {forecast_period} 후 주가를 예측하세요:
 
+**⭐ Prophet 시계열 예측 (통계 모델):**
+- Prophet 예측가: {prophet_price if prophet_price else 'N/A'}
+- Prophet 추세: {prophet_trend}
+- Prophet 신뢰도: {prophet_confidence}
+- 신뢰구간 하한: {prophet_result.get('lower_bound', 'N/A') if 'error' not in prophet_result else 'N/A'}
+- 신뢰구간 상한: {prophet_result.get('upper_bound', 'N/A') if 'error' not in prophet_result else 'N/A'}
+
+**⭐ 단기 기술적 지표 (1일 예측 특화):**
+- VWAP 대비 현재가: {short_term.get('vwap_position', 'N/A') if 'error' not in short_term else 'N/A'}%
+- 장중 모멘텀: {short_term.get('intraday_momentum', 'N/A') if 'error' not in short_term else 'N/A'}%
+- 거래량 급증 여부: {'예' if short_term.get('volume_surge', False) else '아니오'} ({short_term.get('volume_surge_ratio', 100) if 'error' not in short_term else 100}%)
+- 스토캐스틱 RSI: {short_term.get('stochastic_rsi', 'N/A') if 'error' not in short_term else 'N/A'}
+- ATR 변동성: {short_term.get('atr_percent', 'N/A') if 'error' not in short_term else 'N/A'}%
+- 단기 MA 신호: {short_term.get('ma_signal', 'N/A') if 'error' not in short_term else 'N/A'}
+- 종합 단기 신호: {short_term_signal} (매수신호 비율: {bullish_ratio}%)
+{backtest_info}
 **현재 주가 정보:**
 - 회사: {company_name}
 - 현재가: {current_price}
 - 전일 대비: {price_info.get('change_percent')}%
 
-**기술적 분석:**
+**기술적 분석 (중장기):**
 - RSI: {analysis.get('rsi')}
 - MA5: {analysis.get('ma5')}, MA20: {analysis.get('ma20')}, MA60: {analysis.get('ma60')}
 - MACD: {analysis.get('macd')}, Signal: {analysis.get('macd_signal')}
@@ -989,14 +1496,11 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
 - VIX (공포지수): {macro.get('volatility', {}).get('VIX', {}).get('value', 'N/A')} ({macro.get('volatility', {}).get('VIX', {}).get('interpretation', 'N/A')})
 - 미국 10년물 금리: {macro.get('bonds', {}).get('US 10Y Treasury', {}).get('yield', 'N/A')}%
 - USD/KRW 환율: {macro.get('currencies', {}).get('USD/KRW', {}).get('rate', 'N/A')}원
-- 금 가격: ${macro.get('commodities', {}).get('Gold', {}).get('price', 'N/A')}
-- 유가 (WTI): ${macro.get('commodities', {}).get('Crude Oil (WTI)', {}).get('price', 'N/A')}
 
 **동종업계 비교:**
 - 섹터/업종: {peer_data.get('sector', 'N/A')} / {peer_data.get('industry', 'N/A')}
 - 업종 대비 P/E: {peer_data.get('relative_position', {}).get('pe_ratio', 'N/A')}
 - 업종 대비 ROE: {peer_data.get('relative_position', {}).get('roe', 'N/A')}
-- 업종 대비 성장성: {peer_data.get('relative_position', {}).get('revenue_growth', 'N/A')}
 
 **뉴스 감성 분석:**
 - 종합 감성 점수: {news.get('overall_sentiment', {}).get('score', 0)} ({news.get('overall_sentiment', {}).get('label', '중립')})
@@ -1005,10 +1509,16 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
 - 최근 뉴스 헤드라인:
 {chr(10).join([f"  - [{item.get('sentiment_label', '중립')}] {item['title']}" for item in news.get('news', [])[:3]])}
 
+**앙상블 예측 지침:**
+1. Prophet 예측가를 기준으로 하되, 단기 지표와 뉴스를 반영하여 조정
+2. 단기(1일) 예측 시: 단기 지표 비중 40%, Prophet 30%, 뉴스 30%
+3. 중장기 예측 시: Prophet 40%, 펀더멘털 30%, 거시경제 30%
+4. Prophet 예측가가 있으면 ±5% 범위 내에서 최종 예측가 결정
+
 **예측 요구사항:**
 1. {forecast_period} 후 예상 주가를 **반드시 숫자로만** 출력 (예: 160000)
 2. 상승/하락/보합 중 하나 선택
-3. 예측 근거 (기술적 지표 + 펀더멘털 + 뉴스 + 시장 상황)
+3. 예측 근거 (Prophet + 단기지표 + 기술적 + 뉴스)
 4. 신뢰도 (상/중/하)
 5. 주요 리스크 요인
 
@@ -1018,11 +1528,11 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
 방향: [상승/하락/보합]
 
 📊 예측 근거:
-- [기술적 분석 근거]
-- [펀더멘털 분석 근거]
-- [동종업계 비교 결과]
-- [거시경제 환경 영향]
-- [뉴스 감성 분석 결과]
+- [Prophet 예측 결과 반영]
+- [단기 기술적 지표 분석]
+- [중장기 기술적 분석]
+- [뉴스 감성 영향]
+- [거시경제 환경]
 
 신뢰도: [상/중/하]
 ⚠️ 리스크: [주요 위험 요인]
@@ -1072,7 +1582,7 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                                 if price_match:
                                     predicted_price = float(price_match.group(1).replace(',', ''))
 
-                                # 예측 결과를 session_state에 저장
+                                # 예측 결과를 session_state에 저장 (Prophet + 단기지표 + 백테스팅 포함)
                                 st.session_state.forecast_result = {
                                     'response': forecast_response,
                                     'predicted_price': predicted_price,
@@ -1080,9 +1590,41 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                                     'company_name': company_name,
                                     'forecast_period': forecast_period,
                                     'ticker': ticker,
-                                    'df': df.tail(30).copy()  # 차트용 데이터
+                                    'df': df.tail(30).copy(),  # 차트용 데이터
+                                    # Prophet 결과
+                                    'prophet_price': prophet_price,
+                                    'prophet_trend': prophet_trend,
+                                    'prophet_confidence': prophet_confidence,
+                                    'prophet_lower': prophet_result.get('lower_bound') if 'error' not in prophet_result else None,
+                                    'prophet_upper': prophet_result.get('upper_bound') if 'error' not in prophet_result else None,
+                                    # 단기 지표
+                                    'short_term_signal': short_term_signal,
+                                    'bullish_ratio': bullish_ratio,
+                                    'volume_surge': short_term.get('volume_surge', False) if 'error' not in short_term else False,
+                                    # 백테스팅 결과
+                                    'backtest_accuracy': backtest_result.get('direction_accuracy') if backtest_result and 'error' not in backtest_result else None,
+                                    'backtest_reliability': backtest_result.get('reliability') if backtest_result and 'error' not in backtest_result else None
                                 }
                                 st.session_state.forecast_ticker = ticker
+
+                                # ⚡ 예측 결과를 SQLite DB에 저장 (정확도 추적용)
+                                try:
+                                    prediction_id = save_prediction(
+                                        company_name=company_name,
+                                        ticker=ticker,
+                                        forecast_period=forecast_period,
+                                        current_price=current_price,
+                                        predicted_price=predicted_price,
+                                        prophet_price=prophet_price,
+                                        prophet_lower=prophet_result.get('lower_bound') if 'error' not in prophet_result else None,
+                                        prophet_upper=prophet_result.get('upper_bound') if 'error' not in prophet_result else None,
+                                        short_term_signal=short_term_signal,
+                                        bullish_ratio=bullish_ratio,
+                                        notes=f"앙상블 예측 - {prophet_confidence}"
+                                    )
+                                    st.session_state.forecast_result['prediction_id'] = prediction_id
+                                except Exception as save_err:
+                                    print(f"예측 저장 오류: {save_err}")
 
                             except Exception as e:
                                 error_msg = str(e)
@@ -1180,23 +1722,134 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                                 else:
                                     st.info("➡️ 보합 예상")
 
+                        # -------------------------------------------------------
+                        # Prophet vs AI 앙상블 비교 표시
+                        # -------------------------------------------------------
+                        st.markdown("---")
+                        st.markdown("### 📊 앙상블 예측 비교")
+
+                        prophet_price = result.get('prophet_price')
+                        if prophet_price:
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                prophet_format = f"{prophet_price:,.0f}원" if ticker.endswith(".KS") else f"${prophet_price:,.2f}"
+                                st.metric("🔮 Prophet 예측", prophet_format, f"신뢰도: {result.get('prophet_confidence', '중간')}")
+                            with col2:
+                                if predicted_price:
+                                    ai_format = f"{predicted_price:,.0f}원" if ticker.endswith(".KS") else f"${predicted_price:,.2f}"
+                                    st.metric("🤖 AI 앙상블 예측", ai_format)
+                            with col3:
+                                # 두 예측 간 차이
+                                if predicted_price and prophet_price:
+                                    diff_pct = ((predicted_price - prophet_price) / prophet_price) * 100
+                                    st.metric("예측 일치도", f"{100 - abs(diff_pct):.1f}%", f"차이: {diff_pct:+.2f}%")
+
+                            # Prophet 신뢰구간 표시
+                            prophet_lower = result.get('prophet_lower')
+                            prophet_upper = result.get('prophet_upper')
+                            if prophet_lower and prophet_upper:
+                                st.caption(f"📈 Prophet 80% 신뢰구간: {prophet_lower:,.0f} ~ {prophet_upper:,.0f}")
+
+                        # -------------------------------------------------------
+                        # 단기 신호 및 백테스팅 정확도 표시
+                        # -------------------------------------------------------
+                        st.markdown("---")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("#### ⚡ 단기 신호")
+                            short_signal = result.get('short_term_signal', '중립')
+                            bullish = result.get('bullish_ratio', 50)
+                            volume_surge = result.get('volume_surge', False)
+
+                            signal_color = "green" if "매수" in short_signal else "red" if "매도" in short_signal else "gray"
+                            st.markdown(f"**종합 신호:** :{signal_color}[{short_signal}]")
+                            st.progress(bullish / 100)
+                            st.caption(f"매수 신호 비율: {bullish:.1f}%")
+                            if volume_surge:
+                                st.warning("⚠️ 거래량 급증 감지!")
+
+                        with col2:
+                            st.markdown("#### 📈 예측 정확도")
+                            backtest_acc = result.get('backtest_accuracy')
+                            backtest_rel = result.get('backtest_reliability')
+                            if backtest_acc:
+                                st.metric("방향 예측 정확도", f"{backtest_acc:.1f}%")
+                                reliability_color = "green" if backtest_rel in ["매우 높음", "높음"] else "orange" if backtest_rel == "보통" else "red"
+                                st.markdown(f"**신뢰도 등급:** :{reliability_color}[{backtest_rel}]")
+                            else:
+                                st.info("1일 예측 시 백테스팅 결과가 표시됩니다.")
+
                         # AI 예측 결과 표시
                         st.markdown("---")
                         st.markdown("### 🤖 AI 종합 분석")
                         st.markdown(forecast_response)
 
                         st.divider()
-                        st.caption("💡 이 예측은 현재 기술적 지표, 최근 뉴스, 시장 상황을 종합한 AI 분석입니다.")
+                        st.caption("💡 이 예측은 Prophet 시계열 모델 + AI 분석을 앙상블한 결과입니다. 투자 결정은 본인 책임입니다.")
                     else:
-                        st.info("👆 버튼을 클릭하여 AI 기반 주가 예측을 생성하세요.")
-                
+                        st.info("👆 버튼을 클릭하여 AI + Prophet 앙상블 예측을 생성하세요.")
+
+                    # =============================================================
+                    # 예측 기록 및 정확도 통계
+                    # =============================================================
+                    st.markdown("---")
+                    with st.expander("📊 예측 기록 및 정확도", expanded=False):
+                        # 대기 중인 예측 업데이트 (백그라운드)
+                        try:
+                            updated = update_pending_predictions()
+                            if updated > 0:
+                                st.success(f"✅ {updated}건의 예측 결과가 업데이트되었습니다!")
+                        except Exception:
+                            pass
+
+                        # 정확도 통계
+                        stats = get_prediction_stats(ticker=ticker, days=90)
+
+                        if stats['summary']['total'] > 0:
+                            st.markdown("#### 📈 예측 정확도 (최근 90일)")
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("총 예측", f"{stats['summary']['total']}건")
+                            with col2:
+                                st.metric("검증 완료", f"{stats['summary']['verified']}건")
+                            with col3:
+                                st.metric("방향 적중", f"{stats['summary']['correct']}건")
+                            with col4:
+                                acc = stats['summary']['direction_accuracy']
+                                st.metric("적중률", f"{acc}%",
+                                         delta=f"{acc - 50:.1f}%" if acc > 0 else None)
+
+                            # 기간별 통계
+                            if stats['period_stats']:
+                                st.markdown("#### 📋 기간별 정확도")
+                                for ps in stats['period_stats']:
+                                    if ps['verified'] > 0:
+                                        st.write(f"**{ps['period']}**: 적중률 {ps['direction_accuracy']}% ({ps['correct']}/{ps['verified']}), 평균오차 {ps['avg_error'] or 'N/A'}%")
+
+                        # 최근 예측 기록
+                        st.markdown("#### 📜 최근 예측 기록")
+                        predictions = get_recent_predictions(limit=10, ticker=ticker)
+
+                        if predictions:
+                            for p in predictions:
+                                status_icon = "✅" if p['is_correct_direction'] else "❌" if p['is_correct_direction'] is False else "⏳"
+                                with st.container():
+                                    cols = st.columns([2, 2, 2, 2, 1])
+                                    cols[0].write(f"**{p['forecast_period']}** ({p['created_at'][:10]})")
+                                    cols[1].write(f"현재: {p['current_price']:,.0f}")
+                                    cols[2].write(f"예측: {p['predicted_price']:,.0f}" if p['predicted_price'] else "N/A")
+                                    cols[3].write(f"실제: {p['actual_price']:,.0f}" if p['actual_price'] else "대기중")
+                                    cols[4].write(status_icon)
+                        else:
+                            st.info("아직 이 종목의 예측 기록이 없습니다.")
+
                 # =============================================================
                 # 탭 3: 기술적 분석
                 # 이동평균, RSI, MACD, 볼린저밴드 등 기술적 지표 표시
                 # =============================================================
                 with tab3:
-                    # 기술적 분석 도구 호출
-                    analysis = analyze_stock_trend(company_name, period)
+                    # 기술적 분석 도구 호출 (병렬 로딩된 데이터 사용)
+                    analysis = st.session_state.preloaded_data.get('analysis', {})
 
                     if "error" not in analysis:
                         col1, col2 = st.columns(2)
@@ -1262,10 +1915,10 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                 with tab4:
                     st.subheader("💰 펀더멘털 분석")
 
-                    # 기본적 분석 도구 호출
-                    fundamental = get_fundamental_analysis(company_name)
-                    # 기관/내부자 보유 현황 조회
-                    holders = get_institutional_holders(company_name)
+                    # 기본적 분석 도구 호출 (병렬 로딩된 데이터 사용)
+                    fundamental = st.session_state.preloaded_data.get('fundamental', {})
+                    # 기관/내부자 보유 현황 조회 (병렬 로딩된 데이터 사용)
+                    holders = st.session_state.preloaded_data.get('holders', {})
 
                     if "error" not in fundamental:
                         # ---------------------------------------------------------
@@ -1386,8 +2039,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                 with tab5:
                     st.subheader("💵 배당금 정보")
 
-                    with st.spinner("배당 정보 조회 중..."):
-                        dividend_info = get_dividend_info(company_name)
+                    # 병렬 로딩된 데이터 사용 (spinner 제거)
+                    dividend_info = st.session_state.preloaded_data.get('dividend', {})
 
                     if "error" not in dividend_info:
                         is_dividend = dividend_info.get("is_dividend_stock", False)
@@ -1491,9 +2144,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                 with tab6:
                     st.subheader("🏆 동종업계 비교 분석")
 
-                    with st.spinner("경쟁사 데이터 조회 중..."):
-                        # 동종업계 비교 도구 호출
-                        peer_data = get_peer_comparison(company_name)
+                    # 병렬 로딩된 데이터 사용 (spinner 제거)
+                    peer_data = st.session_state.preloaded_data.get('peer', {})
 
                     if "error" not in peer_data:
                         # 섹터/업종 정보
@@ -1592,9 +2244,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                 with tab7:
                     st.subheader("🌍 거시경제 지표")
 
-                    with st.spinner("거시경제 데이터 조회 중..."):
-                        # 거시경제 지표 도구 호출
-                        macro = get_macro_indicators()
+                    # 병렬 로딩된 데이터 사용 (spinner 제거)
+                    macro = st.session_state.preloaded_data.get('macro', {})
 
                     # 시장 심리 배너
                     sentiment = macro.get("market_sentiment", "중립")
@@ -1676,8 +2327,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                 # - 긍정/부정 키워드 하이라이트
                 # =============================================================
                 with tab8:
-                    # 뉴스 감성 분석 도구 호출
-                    news = analyze_company_news(company_name)
+                    # 병렬 로딩된 데이터 사용 (spinner 제거)
+                    news = st.session_state.preloaded_data.get('news', {})
 
                     if "error" not in news and news.get('news'):
                         # 종합 감성 점수 및 라벨
@@ -1771,15 +2422,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                 "💡 환율 변동은 수출 기업의 실적에 큰 영향을 미칩니다.",
             ]
 
-            # 분석 단계 정의
+            # 분석 단계 정의 (최적화: 데이터는 이미 병렬 로딩 완료)
             analysis_steps = [
-                ("💰 현재가 조회 중...", "주가 데이터 수집"),
-                ("📊 기술적 분석 중...", "RSI, MACD, 볼린저밴드 계산"),
-                ("💼 펀더멘털 분석 중...", "P/E, ROE, 재무비율 분석"),
-                ("🏛️ 기관 보유 현황 확인 중...", "주요 투자자 데이터 수집"),
-                ("🏆 동종업계 비교 중...", "경쟁사 지표 비교"),
-                ("🌍 거시경제 지표 확인 중...", "금리, 환율, VIX 분석"),
-                ("📰 뉴스 감성 분석 중...", "최신 뉴스 NLP 분석"),
                 ("🤖 AI가 종합 판단 중...", "AI 분석 진행"),
             ]
 
@@ -1793,20 +2437,47 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                 # 랜덤 팁 표시
                 tip_text.info(random.choice(investment_tips))
 
-            # AI 에이전트 인스턴스 생성
-            # 7개 도구를 모두 활용하여 종합 분석 수행
+            # ⚡ 최적화: preloaded_data를 직접 프롬프트에 포함 (도구 호출 제거)
+            preloaded = st.session_state.preloaded_data
+            price_data = preloaded.get('price', {})
+            analysis_data = preloaded.get('analysis', {})
+            fundamental_data = preloaded.get('fundamental', {})
+            holders_data = preloaded.get('holders', {})
+            peer_data = preloaded.get('peer', {})
+            macro_data = preloaded.get('macro', {})
+            news_data = preloaded.get('news', {})
+
+            # 데이터를 프롬프트에 포함할 문자열로 변환
+            data_summary = f"""
+=== 수집된 분석 데이터 ===
+
+**현재가 정보:**
+{price_data}
+
+**기술적 분석:**
+{analysis_data}
+
+**펀더멘털 분석:**
+{fundamental_data}
+
+**기관 보유 현황:**
+{holders_data}
+
+**동종업계 비교:**
+{peer_data}
+
+**거시경제 지표:**
+{macro_data}
+
+**뉴스 감성:**
+{news_data}
+"""
+
+            # AI 에이전트 인스턴스 생성 (도구 없이 - 속도 향상)
             agent = Agent(
                 model=st.session_state.bedrock_model,
-                tools=[
-                    get_stock_price,           # 현재가 조회
-                    analyze_stock_trend,       # 기술적 분석
-                    get_fundamental_analysis,  # 기본적 분석
-                    get_institutional_holders, # 기관 보유 현황
-                    get_peer_comparison,       # 동종업계 비교
-                    get_macro_indicators,      # 거시경제 지표
-                    analyze_company_news       # 뉴스 감성 분석
-                ],
-                system_prompt=st.session_state.system_prompt
+                tools=[],  # ⚡ 도구 호출 제거 (데이터 이미 수집됨)
+                system_prompt=st.session_state.system_prompt + "\n\n" + data_summary
             )
 
             # 진행 상황 시뮬레이션과 함께 AI 분석 실행
@@ -1817,7 +2488,7 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
             result_queue = queue.Queue()
 
             def run_agent():
-                """AI 에이전트 실행 (재시도 로직 포함)"""
+                """AI 에이전트 실행 (재시도 로직 포함) - 최적화: 도구 호출 제거"""
                 max_retries = 3
                 retry_delay = 2  # 초
 
@@ -1829,19 +2500,11 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                                 model_id=BEDROCK_MODEL_ID,
                                 region_name=AWS_REGION
                             )
-                            # 에이전트 재생성
+                            # 에이전트 재생성 (도구 없이 - 속도 향상)
                             retry_agent = Agent(
                                 model=st.session_state.bedrock_model,
-                                tools=[
-                                    get_stock_price,
-                                    analyze_stock_trend,
-                                    get_fundamental_analysis,
-                                    get_institutional_holders,
-                                    get_peer_comparison,
-                                    get_macro_indicators,
-                                    analyze_company_news
-                                ],
-                                system_prompt=st.session_state.system_prompt
+                                tools=[],  # ⚡ 도구 호출 제거
+                                system_prompt=st.session_state.system_prompt + "\n\n" + data_summary
                             )
                             result = retry_agent(current_input)
                         else:

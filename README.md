@@ -5,10 +5,12 @@
 ![AWS](https://img.shields.io/badge/AWS-ECS_Fargate-FF9900?logo=amazon-aws&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Container-2496ED?logo=docker&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.0+-FF4B4B?logo=streamlit&logoColor=white)
+![Prophet](https://img.shields.io/badge/Prophet-Forecasting-168363?logo=meta&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-Database-003B57?logo=sqlite&logoColor=white)
 
-Strands Agents SDK와 Amazon Bedrock Claude 모델을 사용한 주식 정보 조회, 분석, 예측 Agent 입니다.
+Strands Agents SDK와 Amazon Bedrock Claude Opus 4.5 모델을 사용한 주식 정보 조회, 분석, 예측 Agent 입니다.
 
-**11가지 AI 도구**로 기술적 분석, 펀더멘털 분석, 뉴스 감성 분석, 동종업계 비교, 거시경제 지표, 배당금 정보까지 종합적인 투자 판단을 제공합니다.
+**14가지 AI 도구**로 기술적 분석, 펀더멘털 분석, 뉴스 감성 분석, 동종업계 비교, 거시경제 지표, 배당금 정보, **Prophet 시계열 예측**, **예측 정확도 추적**까지 종합적인 투자 판단을 제공합니다.
 
 🌐 **Live Demo**: [https://d3ierd4g7thub6.cloudfront.net](https://d3ierd4g7thub6.cloudfront.net)
 
@@ -24,27 +26,54 @@ Strands Agents SDK와 Amazon Bedrock Claude 모델을 사용한 주식 정보 �
 <summary>📊 아키텍처 다이어그램 (텍스트 버전)</summary>
 
 ```mermaid
-flowchart LR
+flowchart TB
+    subgraph User Layer
+        User[👤 사용자]
+    end
+
     subgraph AWS Cloud
-        ECR[📦 ECR<br/>Container Registry]
         CF[🌐 CloudFront<br/>HTTPS]
         ALB[⚖️ ALB<br/>HTTP:80]
-        ECS[🐳 ECS Fargate<br/>Streamlit App<br/>4GB / 2vCPU]
-        Bedrock[🤖 Bedrock<br/>Claude 3.5]
+
+        subgraph ECS Cluster
+            ECS[🐳 ECS Fargate<br/>Streamlit App<br/>4GB / 2vCPU]
+        end
+
+        ECR[📦 ECR<br/>Container Registry]
+        Bedrock[🤖 Bedrock<br/>Claude Opus 4.5]
         CW[📊 CloudWatch<br/>Container Insights]
     end
 
-    User[👤 사용자] --> CF
+    subgraph Data Layer
+        SQLite[(🗄️ SQLite<br/>predictions.db)]
+        YFinance[📈 yfinance<br/>Stock Data API]
+        GoogleNews[📰 Google News<br/>RSS Feed]
+    end
+
+    subgraph Batch System
+        Timer[⏰ Systemd Timer<br/>Daily 09:00 KST]
+        BatchScript[🔄 batch_prediction.py<br/>7 Stocks × 2 Periods]
+    end
+
+    User --> CF
     CF --> ALB
     ALB --> ECS
-    ECS <--> |API Calls| Bedrock
+    ECS <--> |AI Analysis| Bedrock
+    ECS <--> |Prophet + AI| SQLite
+    ECS <--> YFinance
+    ECS <--> GoogleNews
     ECR -.-> |Pull Image| ECS
     ECS -.-> |Logs| CW
+    Timer --> BatchScript
+    BatchScript --> SQLite
+    BatchScript --> YFinance
 ```
 
 </details>
 
-**배포 구조**: User → CloudFront (HTTPS) → ALB (HTTP:80) → ECS Fargate (Streamlit Container) → Bedrock Claude 3.5
+**배포 구조**: User → CloudFront (HTTPS) → ALB (HTTP:80) → ECS Fargate (Streamlit Container) → Bedrock Claude Opus 4.5
+
+**예측 시스템**: Systemd Timer (Daily) → Batch Prediction → SQLite (predictions.db) → Accuracy Dashboard
 
 ## 📸 스크린샷
 
@@ -56,6 +85,7 @@ flowchart LR
 
 ## 기능
 
+### 📈 분석 도구 (14가지)
   1. 💰 현재가 조회 → 주가 데이터 수집
   2. 📊 기술적 분석 → RSI, MACD, 볼린저밴드 계산
   3. 💼 펀더멘털 분석 → P/E, ROE, 재무비율 분석
@@ -66,10 +96,13 @@ flowchart LR
   8. 🔥 시장 현황 → 거래량 TOP, 급등/급락 종목
   9. 🎯 테마별 종목 → AI/반도체, 전기차, 빅테크, 배당주
   10. 💵 배당금 정보 → 배당수익률, 배당성향, 배당 내역
-  11. 🤖 AI 종합 판단 → Claude AI 분석 진행
+  11. 🔮 **Prophet 시계열 예측** → 통계 기반 주가 예측 (NEW)
+  12. ⚡ **단기 기술적 지표** → VWAP, Stochastic RSI, ATR (NEW)
+  13. 📉 **백테스팅 정확도** → 과거 예측 성능 측정 (NEW)
+  14. 🤖 AI 종합 판단 → Claude Opus 4.5 앙상블 분석
 
 ### 🎯 주요 특징
-- **실시간 진행 상황 표시**: AI 분석 중 8단계 진행률 + 투자 팁 제공
+- **실시간 진행 상황 표시**: AI 분석 중 진행률 + 투자 팁 제공
 - **매수/매도/관망 신호**: 종합 분석 결과를 한눈에 확인
 - **NLP 뉴스 감성 분석**: Google News 기반 긍정/부정 점수화 (-100 ~ +100)
 - **테마별 종목 탐색**: AI/반도체, 전기차/배터리, 빅테크, K-플랫폼, 배당주
@@ -77,14 +110,32 @@ flowchart LR
 - **배당 투자 가이드**: 배당수익률, 배당성향, 배당 내역 분석
 - **한글 완벽 지원**: 모든 분석 결과를 한글로 친절하게 제공
 
+### 🔮 예측 정확도 추적 시스템 (NEW)
+
+| 기능 | 설명 |
+|------|------|
+| **앙상블 예측** | Prophet 시계열 + Claude AI + 단기 지표 결합 |
+| **배치 예측** | 7개 종목 × 2개 기간 (1일/7일) 매일 자동 실행 |
+| **정확도 대시보드** | 종목별/기간별 예측 적중률 시각화 |
+| **자동 검증** | 예측 기간 경과 후 실제 가격과 자동 비교 |
+
+**배치 예측 대상 종목:**
+| 시장 | 종목 |
+|------|------|
+| 🇰🇷 한국 | 삼성전자, SK하이닉스, 현대자동차 |
+| 🇺🇸 미국 | Amazon, Apple, Nvidia, Google |
+
 ## 기술 스택
 
 | 카테고리 | 기술 |
 |----------|------|
 | AI Framework | Strands Agents SDK |
-| AI Model | Amazon Bedrock Claude 3.5 Sonnet |
+| AI Model | Amazon Bedrock Claude Opus 4.5 |
+| Forecasting | Prophet (Meta), 앙상블 예측 |
 | Frontend | Streamlit, Plotly |
 | Data | yfinance, Google News RSS |
+| Database | SQLite (예측 기록 저장) |
+| Scheduling | Systemd Timer (배치 예측) |
 | Infrastructure | AWS CDK (CloudFront, ALB, ECS Fargate, ECR, S3) |
 | Security | CloudFront Prefix List, Secret Header 검증 |
 | Logging | ALB/CloudFront Access Logs → S3 |
@@ -270,20 +321,54 @@ aws ecs update-service --cluster StockAppCluster --service StockAppService --for
 
 ```
 .
-├── app.py              # Streamlit UI (메인 애플리케이션)
-├── stock_agent.py      # AI Agent 도구 정의
-├── Dockerfile          # ECS Fargate 컨테이너 이미지 정의
-├── deploy.sh           # ECR 빌드/푸시 및 ECS 배포 스크립트
-├── run_app.sh          # 로컬 실행 스크립트
-├── requirements.txt    # Python 패키지 의존성
-├── cdk/                # AWS CDK 인프라 코드
+├── app.py                  # Streamlit UI (메인 애플리케이션)
+├── stock_agent.py          # AI Agent 도구 정의 (14가지 도구)
+├── prediction_tracker.py   # 예측 기록 SQLite 관리 모듈 (NEW)
+├── batch_prediction.py     # 배치 예측 스크립트 (NEW)
+├── predictions.db          # SQLite 데이터베이스 (자동 생성)
+├── Dockerfile              # ECS Fargate 컨테이너 이미지 정의
+├── deploy.sh               # ECR 빌드/푸시 및 ECS 배포 스크립트
+├── run_app.sh              # 로컬 실행 스크립트
+├── setup_cron.sh           # 크론잡 설정 스크립트 (NEW)
+├── requirements.txt        # Python 패키지 의존성
+├── batch-prediction.service  # Systemd 서비스 파일 (NEW)
+├── batch-prediction.timer    # Systemd 타이머 파일 (NEW)
+├── cdk/                    # AWS CDK 인프라 코드
 │   ├── lib/
 │   │   └── stock-app-stack.ts  # CloudFront, ALB, ECS Fargate, ECR 설정
 │   └── bin/
 │       └── stock-app.ts
-├── images/             # 스크린샷 및 아키텍처 이미지
+├── logs/                   # 배치 예측 로그 디렉토리
+├── images/                 # 스크린샷 및 아키텍처 이미지
 └── README.md
 ```
+
+## 배치 예측 설정
+
+### Systemd Timer 활성화 (서버)
+```bash
+# 서비스/타이머 파일 복사
+sudo cp batch-prediction.service /etc/systemd/system/
+sudo cp batch-prediction.timer /etc/systemd/system/
+
+# 타이머 활성화 및 시작
+sudo systemctl daemon-reload
+sudo systemctl enable batch-prediction.timer
+sudo systemctl start batch-prediction.timer
+
+# 상태 확인
+sudo systemctl status batch-prediction.timer
+```
+
+### 수동 실행
+```bash
+# 배치 예측 수동 실행
+source venv/bin/activate
+python batch_prediction.py
+```
+
+### 예측 정확도 대시보드
+앱 사이드바 최상단의 **"🎯 정확도 대시보드 보기"** 버튼을 클릭하여 확인할 수 있습니다.
 
 ## 코드 품질
 
@@ -292,6 +377,8 @@ aws ecs update-service --cluster StockAppCluster --service StockAppService --for
 - ✅ 0으로 나누기 방지 (RSI, 변동성 계산)
 - ✅ 데이터 검증 (NaN, 빈 데이터)
 - ✅ 타입 안정성 (명확한 반환 타입)
+- ✅ 병렬 데이터 로딩 (ThreadPoolExecutor)
+- ✅ API 캐싱 (Streamlit cache, 5분 TTL)
 
 ## 주의사항
 

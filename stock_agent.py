@@ -19,7 +19,7 @@
 - yfinance: 야후 파이낸스 API (주가, 재무 데이터)
 - feedparser: RSS 뉴스 피드 파싱
 - Strands Agent SDK: AI 에이전트 프레임워크
-- AWS Bedrock: Claude 3.5 Sonnet 모델
+- AWS Bedrock: Claude Opus 4.5 모델
 """
 
 # =============================================================================
@@ -29,10 +29,12 @@ import sys                        # 시스템 설정 (인코딩)
 import os                         # 운영체제 인터페이스
 import yfinance as yf             # 야후 파이낸스 API
 import pandas as pd               # 데이터 처리
+import numpy as np                # 수치 연산
 import feedparser                 # RSS 피드 파싱
 from datetime import datetime, timedelta  # 날짜/시간 처리
 from strands import Agent, tool   # AI 에이전트 및 도구 데코레이터
 from strands.models import BedrockModel   # AWS Bedrock 모델 래퍼
+from prophet import Prophet       # 시계열 예측 모델
 
 # =============================================================================
 # UTF-8 인코딩 설정
@@ -47,7 +49,7 @@ if sys.stdin.encoding != 'utf-8':
 # AWS 설정 - 환경변수에서 리전 읽기 (기본값: us-east-1)
 # =============================================================================
 AWS_REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
-BEDROCK_MODEL_ID = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+BEDROCK_MODEL_ID = "us.anthropic.claude-opus-4-5-20251101-v1:0"
 
 
 # =============================================================================
@@ -1012,7 +1014,7 @@ def main():
     터미널에서 회사명을 입력하면 AI가 분석 결과를 출력합니다.
     """
 
-    # AWS Bedrock Claude 3.5 Sonnet 모델 초기화
+    # AWS Bedrock Claude Opus 4.5 모델 초기화
     bedrock_model = BedrockModel(
         model_id=BEDROCK_MODEL_ID,
         region_name=AWS_REGION
@@ -1440,6 +1442,399 @@ def get_dividend_info(company_name: str) -> dict:
         "dividend_growth": round(dividend_growth, 2) if dividend_growth else None,
         "is_dividend_stock": dividend_yield is not None and dividend_yield > 0
     }
+
+
+# =============================================================================
+# 도구 11: Prophet 시계열 예측 (Time Series Forecast)
+# =============================================================================
+@tool
+def get_prophet_forecast(company_name: str, forecast_days: int = 1) -> dict:
+    """Prophet 모델을 사용하여 주가를 예측합니다.
+
+    과거 주가 데이터를 기반으로 통계적 시계열 예측을 수행합니다.
+    1일 단기 예측에 최적화되어 있습니다.
+
+    Args:
+        company_name: 회사명
+        forecast_days: 예측 기간 (일 단위, 기본값 1일)
+
+    Returns:
+        예측 주가, 신뢰 구간, 추세 정보
+    """
+    ticker = get_ticker(company_name)
+
+    try:
+        stock = yf.Ticker(ticker)
+        # 6개월 데이터로 학습 (단기 예측에 최적)
+        hist = stock.history(period="6mo")
+    except Exception as e:
+        return {"error": f"데이터 조회 실패: {str(e)}"}
+
+    if hist.empty or len(hist) < 30:
+        return {"error": "충분한 과거 데이터가 없습니다 (최소 30일 필요)"}
+
+    try:
+        # Prophet 형식으로 데이터 준비
+        df = pd.DataFrame({
+            'ds': hist.index.tz_localize(None),
+            'y': hist['Close'].values
+        })
+
+        # Prophet 모델 설정 (단기 예측 최적화)
+        model = Prophet(
+            daily_seasonality=True,
+            weekly_seasonality=True,
+            yearly_seasonality=False,  # 6개월 데이터이므로 비활성화
+            changepoint_prior_scale=0.1,  # 변화점 감도
+            seasonality_prior_scale=0.1,
+            interval_width=0.8  # 80% 신뢰 구간
+        )
+
+        # 로그 출력 억제
+        import logging
+        logging.getLogger('prophet').setLevel(logging.WARNING)
+        logging.getLogger('cmdstanpy').setLevel(logging.WARNING)
+
+        model.fit(df)
+
+        # 예측 수행
+        future = model.make_future_dataframe(periods=forecast_days)
+        forecast = model.predict(future)
+
+        # 마지막 예측값 추출
+        last_forecast = forecast.tail(forecast_days).iloc[-1]
+        current_price = hist['Close'].iloc[-1]
+        predicted_price = last_forecast['yhat']
+        lower_bound = last_forecast['yhat_lower']
+        upper_bound = last_forecast['yhat_upper']
+
+        # 추세 분석
+        price_change = predicted_price - current_price
+        change_percent = (price_change / current_price) * 100
+
+        # 추세 방향 결정
+        if change_percent > 1:
+            trend = "상승"
+        elif change_percent < -1:
+            trend = "하락"
+        else:
+            trend = "보합"
+
+        # 예측 신뢰도 계산 (신뢰 구간 폭 기반)
+        confidence_range = upper_bound - lower_bound
+        confidence_ratio = confidence_range / current_price * 100
+        if confidence_ratio < 3:
+            confidence = "높음"
+        elif confidence_ratio < 6:
+            confidence = "중간"
+        else:
+            confidence = "낮음"
+
+        return {
+            "company": company_name,
+            "ticker": ticker,
+            "current_price": round(current_price, 2),
+            "predicted_price": round(predicted_price, 2),
+            "lower_bound": round(lower_bound, 2),
+            "upper_bound": round(upper_bound, 2),
+            "price_change": round(price_change, 2),
+            "change_percent": round(change_percent, 2),
+            "trend": trend,
+            "confidence": confidence,
+            "forecast_days": forecast_days,
+            "model": "Prophet"
+        }
+
+    except Exception as e:
+        return {"error": f"Prophet 예측 실패: {str(e)}"}
+
+
+# =============================================================================
+# 도구 12: 단기 기술적 지표 (Short-term Technical Indicators)
+# =============================================================================
+@tool
+def get_short_term_indicators(company_name: str) -> dict:
+    """1일 단기 예측에 유용한 기술적 지표를 계산합니다.
+
+    포함 지표:
+    - VWAP (거래량가중평균가)
+    - 당일 모멘텀
+    - 거래량 급증 감지
+    - 5일/10일 단기 이동평균
+    - 스토캐스틱 RSI
+    - ATR (평균진폭)
+
+    Args:
+        company_name: 회사명
+
+    Returns:
+        단기 기술적 지표 딕셔너리
+    """
+    ticker = get_ticker(company_name)
+
+    try:
+        stock = yf.Ticker(ticker)
+        # 최근 1개월 데이터 (1시간봉이면 더 좋지만 yfinance 제한)
+        hist = stock.history(period="1mo")
+        # 당일 데이터 (가능한 경우)
+        hist_1d = stock.history(period="1d", interval="1h")
+    except Exception as e:
+        return {"error": f"데이터 조회 실패: {str(e)}"}
+
+    if hist.empty or len(hist) < 10:
+        return {"error": "충분한 데이터가 없습니다"}
+
+    close = hist['Close']
+    high = hist['High']
+    low = hist['Low']
+    volume = hist['Volume']
+
+    current_price = close.iloc[-1]
+
+    # 1. VWAP 계산 (최근 5일)
+    typical_price = (high + low + close) / 3
+    vwap_5d = (typical_price[-5:] * volume[-5:]).sum() / volume[-5:].sum() if volume[-5:].sum() > 0 else current_price
+    vwap_position = ((current_price - vwap_5d) / vwap_5d) * 100
+
+    # 2. 당일 모멘텀 (시가 대비 현재가)
+    today_open = hist['Open'].iloc[-1]
+    intraday_momentum = ((current_price - today_open) / today_open) * 100
+
+    # 3. 거래량 급증 감지
+    avg_volume_20 = volume[-20:].mean() if len(volume) >= 20 else volume.mean()
+    current_volume = volume.iloc[-1]
+    volume_surge_ratio = (current_volume / avg_volume_20) * 100 if avg_volume_20 > 0 else 100
+    volume_surge = volume_surge_ratio > 150  # 평균 대비 150% 이상이면 급증
+
+    # 4. 단기 이동평균
+    ma5 = close[-5:].mean() if len(close) >= 5 else current_price
+    ma10 = close[-10:].mean() if len(close) >= 10 else current_price
+
+    # MA 크로스 신호
+    if ma5 > ma10:
+        ma_signal = "골든크로스 (상승)"
+    elif ma5 < ma10:
+        ma_signal = "데드크로스 (하락)"
+    else:
+        ma_signal = "중립"
+
+    # 5. 스토캐스틱 RSI (14일)
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    rsi_current = rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50
+
+    # 스토캐스틱 RSI
+    rsi_min = rsi[-14:].min() if len(rsi) >= 14 else 0
+    rsi_max = rsi[-14:].max() if len(rsi) >= 14 else 100
+    stoch_rsi = ((rsi_current - rsi_min) / (rsi_max - rsi_min) * 100) if (rsi_max - rsi_min) > 0 else 50
+
+    # 6. ATR (평균진폭) - 변동성 지표
+    tr = pd.DataFrame({
+        'hl': high - low,
+        'hc': abs(high - close.shift(1)),
+        'lc': abs(low - close.shift(1))
+    }).max(axis=1)
+    atr = tr[-14:].mean() if len(tr) >= 14 else tr.mean()
+    atr_percent = (atr / current_price) * 100
+
+    # 7. 종합 단기 신호 계산
+    bullish_signals = 0
+    bearish_signals = 0
+
+    if vwap_position > 0:
+        bullish_signals += 1
+    else:
+        bearish_signals += 1
+
+    if intraday_momentum > 0:
+        bullish_signals += 1
+    else:
+        bearish_signals += 1
+
+    if ma5 > ma10:
+        bullish_signals += 1
+    else:
+        bearish_signals += 1
+
+    if rsi_current < 30:
+        bullish_signals += 1  # 과매도 → 반등 가능
+    elif rsi_current > 70:
+        bearish_signals += 1  # 과매수 → 조정 가능
+
+    if volume_surge and intraday_momentum > 0:
+        bullish_signals += 1  # 거래량 급증 + 상승
+    elif volume_surge and intraday_momentum < 0:
+        bearish_signals += 1  # 거래량 급증 + 하락
+
+    # 종합 신호
+    total_signals = bullish_signals + bearish_signals
+    if total_signals > 0:
+        bullish_ratio = bullish_signals / total_signals * 100
+    else:
+        bullish_ratio = 50
+
+    if bullish_ratio >= 70:
+        short_term_signal = "강한 매수"
+    elif bullish_ratio >= 55:
+        short_term_signal = "약한 매수"
+    elif bullish_ratio >= 45:
+        short_term_signal = "중립"
+    elif bullish_ratio >= 30:
+        short_term_signal = "약한 매도"
+    else:
+        short_term_signal = "강한 매도"
+
+    return {
+        "company": company_name,
+        "ticker": ticker,
+        "current_price": round(current_price, 2),
+        "vwap_5d": round(vwap_5d, 2),
+        "vwap_position": round(vwap_position, 2),
+        "intraday_momentum": round(intraday_momentum, 2),
+        "volume_surge": volume_surge,
+        "volume_surge_ratio": round(volume_surge_ratio, 1),
+        "ma5": round(ma5, 2),
+        "ma10": round(ma10, 2),
+        "ma_signal": ma_signal,
+        "rsi": round(rsi_current, 1),
+        "stochastic_rsi": round(stoch_rsi, 1),
+        "atr": round(atr, 2),
+        "atr_percent": round(atr_percent, 2),
+        "bullish_signals": bullish_signals,
+        "bearish_signals": bearish_signals,
+        "bullish_ratio": round(bullish_ratio, 1),
+        "short_term_signal": short_term_signal
+    }
+
+
+# =============================================================================
+# 도구 13: 백테스팅 (Backtesting)
+# =============================================================================
+@tool
+def get_backtest_accuracy(company_name: str, lookback_days: int = 30) -> dict:
+    """과거 데이터를 기반으로 Prophet 예측 정확도를 백테스트합니다.
+
+    최근 N일간의 예측 정확도를 계산하여 신뢰도를 평가합니다.
+
+    Args:
+        company_name: 회사명
+        lookback_days: 백테스트 기간 (기본값 30일)
+
+    Returns:
+        예측 정확도 통계
+    """
+    ticker = get_ticker(company_name)
+
+    try:
+        stock = yf.Ticker(ticker)
+        # 백테스트를 위해 더 긴 기간 데이터 필요
+        hist = stock.history(period="1y")
+    except Exception as e:
+        return {"error": f"데이터 조회 실패: {str(e)}"}
+
+    if hist.empty or len(hist) < 180:  # 최소 6개월 + 백테스트 기간
+        return {"error": "충분한 과거 데이터가 없습니다 (최소 6개월 필요)"}
+
+    try:
+        import logging
+        logging.getLogger('prophet').setLevel(logging.WARNING)
+        logging.getLogger('cmdstanpy').setLevel(logging.WARNING)
+
+        # 백테스트 결과 저장
+        predictions = []
+        actuals = []
+        directions_correct = 0
+
+        # 최근 lookback_days일에 대해 백테스트
+        test_days = min(lookback_days, len(hist) - 150)  # 학습 데이터 확보
+
+        for i in range(test_days, 0, -5):  # 5일 간격으로 테스트 (속도 최적화)
+            # 학습 데이터 (예측 시점까지)
+            train_end = len(hist) - i
+            train_data = hist.iloc[:train_end]
+
+            if len(train_data) < 120:  # 최소 학습 데이터
+                continue
+
+            # Prophet 모델 학습
+            df = pd.DataFrame({
+                'ds': train_data.index.tz_localize(None),
+                'y': train_data['Close'].values
+            })
+
+            model = Prophet(
+                daily_seasonality=True,
+                weekly_seasonality=True,
+                yearly_seasonality=False,
+                changepoint_prior_scale=0.1,
+                seasonality_prior_scale=0.1
+            )
+            model.fit(df)
+
+            # 1일 후 예측
+            future = model.make_future_dataframe(periods=1)
+            forecast = model.predict(future)
+            predicted = forecast['yhat'].iloc[-1]
+
+            # 실제 값
+            actual = hist['Close'].iloc[train_end] if train_end < len(hist) else None
+
+            if actual is not None:
+                predictions.append(predicted)
+                actuals.append(actual)
+
+                # 방향 정확도 (상승/하락 예측)
+                prev_price = train_data['Close'].iloc[-1]
+                pred_direction = predicted > prev_price
+                actual_direction = actual > prev_price
+                if pred_direction == actual_direction:
+                    directions_correct += 1
+
+        if len(predictions) == 0:
+            return {"error": "백테스트 데이터 부족"}
+
+        # 정확도 메트릭 계산
+        predictions = np.array(predictions)
+        actuals = np.array(actuals)
+
+        # MAE (평균절대오차)
+        mae = np.mean(np.abs(predictions - actuals))
+        mae_percent = (mae / np.mean(actuals)) * 100
+
+        # MAPE (평균절대백분율오차)
+        mape = np.mean(np.abs((actuals - predictions) / actuals)) * 100
+
+        # 방향 정확도
+        direction_accuracy = (directions_correct / len(predictions)) * 100
+
+        # 예측 신뢰도 등급
+        if mape < 2 and direction_accuracy >= 70:
+            reliability = "매우 높음"
+        elif mape < 4 and direction_accuracy >= 60:
+            reliability = "높음"
+        elif mape < 6 and direction_accuracy >= 50:
+            reliability = "보통"
+        else:
+            reliability = "낮음"
+
+        return {
+            "company": company_name,
+            "ticker": ticker,
+            "test_period_days": lookback_days,
+            "test_samples": len(predictions),
+            "mae": round(mae, 2),
+            "mae_percent": round(mae_percent, 2),
+            "mape": round(mape, 2),
+            "direction_accuracy": round(direction_accuracy, 1),
+            "reliability": reliability,
+            "description": f"최근 {lookback_days}일간 {len(predictions)}회 예측 테스트 결과"
+        }
+
+    except Exception as e:
+        return {"error": f"백테스트 실패: {str(e)}"}
 
 
 if __name__ == "__main__":

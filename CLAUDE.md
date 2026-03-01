@@ -7,7 +7,7 @@ This is a Korean stock analysis AI agent service that provides real-time stock q
 ## Tech Stack
 
 - **Frontend**: Streamlit (Python web framework)
-- **AI/ML**: AWS Bedrock (Claude 3.5 Sonnet), Strands Agent SDK, Prophet (time series forecasting)
+- **AI/ML**: AWS Bedrock (Claude Opus 4.5), Strands Agent SDK, Prophet (time series forecasting)
 - **Data**: yfinance (Yahoo Finance API), feedparser (RSS news)
 - **Visualization**: Plotly
 - **Infrastructure**: AWS CDK (TypeScript)
@@ -87,7 +87,7 @@ Korean stocks use 6-digit codes with `.KS` suffix:
 ## AWS Configuration
 
 - **Region**: us-east-1
-- **Model**: us.anthropic.claude-3-5-sonnet-20241022-v2:0
+- **Model**: us.anthropic.claude-opus-4-5-20251101-v1:0
 - **Infrastructure**: AWS CDK (TypeScript) in `cdk/` directory
 
 ## Important Notes

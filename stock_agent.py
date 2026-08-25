@@ -19,7 +19,7 @@
 - yfinance: 야후 파이낸스 API (주가, 재무 데이터)
 - feedparser: RSS 뉴스 피드 파싱
 - Strands Agent SDK: AI 에이전트 프레임워크
-- AWS Bedrock: Claude Opus 4.5 모델
+- agy CLI: 로컬 계정(Google/Anthropic) 기반 AI 모델 호출
 """
 
 # =============================================================================
@@ -33,7 +33,7 @@ import numpy as np                # 수치 연산
 import feedparser                 # RSS 피드 파싱
 from datetime import datetime, timedelta  # 날짜/시간 처리
 from strands import Agent, tool   # AI 에이전트 및 도구 데코레이터
-from strands.models import BedrockModel   # AWS Bedrock 모델 래퍼
+from ai_backend import create_agent_model   # 로컬 계정 기반 AI 모델(agy CLI)
 from prophet import Prophet       # 시계열 예측 모델
 
 # =============================================================================
@@ -44,13 +44,6 @@ if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 if sys.stdin.encoding != 'utf-8':
     sys.stdin.reconfigure(encoding='utf-8')
-
-# =============================================================================
-# AWS 설정 - 환경변수에서 리전 읽기 (기본값: us-east-1)
-# =============================================================================
-AWS_REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
-BEDROCK_MODEL_ID = "us.anthropic.claude-opus-4-5-20251101-v1:0"
-
 
 # =============================================================================
 # 회사명 → 티커 심볼 매핑 테이블
@@ -65,6 +58,7 @@ TICKER_MAP = {
     "apple": "AAPL", "애플": "AAPL",
     "tesla": "TSLA", "테슬라": "TSLA",
     "google": "GOOGL", "구글": "GOOGL",
+    "alphabet": "GOOGL", "alphabeta": "GOOGL", "알파벳": "GOOGL", "알파벳a": "GOOGL", "알파벳A": "GOOGL",
     "microsoft": "MSFT", "마이크로소프트": "MSFT",
     "meta": "META", "메타": "META",
     "nvidia": "NVDA", "엔비디아": "NVDA",
@@ -1014,19 +1008,17 @@ def main():
     터미널에서 회사명을 입력하면 AI가 분석 결과를 출력합니다.
     """
 
-    # AWS Bedrock Claude Opus 4.5 모델 초기화
-    bedrock_model = BedrockModel(
-        model_id=BEDROCK_MODEL_ID,
-        region_name=AWS_REGION
-    )
+    # 로컬 계정 기반 AI 모델 초기화 (agy CLI, AI_PROVIDER=gemini|claude)
+    ai_model = create_agent_model()
 
     # AI 에이전트 생성
     # - model: 사용할 LLM 모델
-    # - tools: AI가 호출할 수 있는 도구 목록
+    # - tools: AgyCliModel은 도구 호출(tool use)을 지원하지 않으므로 비워둠
+    #   (CLI 모드 사용 시 회사명만 넘겨 텍스트 응답을 받는다)
     # - system_prompt: AI의 역할과 동작 방식 정의
     agent = Agent(
-        model=bedrock_model,
-        tools=[get_stock_price, analyze_stock_trend, analyze_company_news],
+        model=ai_model,
+        tools=[],
         system_prompt="""당신은 주식 정보 도우미입니다.
 
 **사용자 입력 처리:**

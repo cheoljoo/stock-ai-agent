@@ -3,6 +3,8 @@ cdk.out/
 *.pyc
 __pycache__/
 venv/
+.venv/
 .env
 .DS_Store
 *.log
+*.db

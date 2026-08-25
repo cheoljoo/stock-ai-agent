@@ -1,4 +1,3 @@
 #!/bin/bash
 cd "$(dirname "$0")"
-source venv/bin/activate
-streamlit run app.py
+uv run streamlit run app.py

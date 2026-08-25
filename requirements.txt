@@ -1,5 +1,4 @@
 strands-agents
-boto3
 yfinance
 python-dotenv
 feedparser

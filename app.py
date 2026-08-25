@@ -16,7 +16,7 @@
 - Streamlit: 웹 UI 프레임워크
 - yfinance: 주가 데이터 API
 - Plotly: 인터랙티브 차트
-- AWS Bedrock: Claude AI 모델
+- agy CLI: 로컬 계정(Google/Anthropic) 기반 AI 모델 호출
 - Strands Agent SDK: AI 에이전트 프레임워크
 """
 
@@ -50,10 +50,10 @@ from stock_agent import (
     TICKER_MAP                  # 티커 매핑 (자동완성용)
 )
 
-# AWS Bedrock 연동
+# AI 에이전트 연동
 import os
 from strands import Agent                    # AI 에이전트 클래스
-from strands.models import BedrockModel      # Bedrock 모델 래퍼
+from ai_backend import create_agent_model    # 로컬 계정 기반 AI 모델(agy CLI)
 from concurrent.futures import ThreadPoolExecutor, as_completed  # 병렬 처리
 
 # 예측 기록 추적 모듈
@@ -158,12 +158,6 @@ def load_all_data_parallel(company_name: str, period: str) -> dict:
                 results[key] = {"error": str(e)}
 
     return results
-
-# =============================================================================
-# AWS 설정 - 환경변수에서 리전 읽기 (기본값: us-east-1)
-# =============================================================================
-AWS_REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
-BEDROCK_MODEL_ID = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 
 # =============================================================================
 # Streamlit 페이지 설정
@@ -414,12 +408,9 @@ def get_theme_css(is_dark: bool) -> str:
 # 상태를 유지하려면 session_state를 사용해야 함
 # =============================================================================
 
-# Bedrock 모델 초기화 (한 번만 생성)
+# AI 모델 초기화 (한 번만 생성) - 로컬 계정 기반 agy CLI 사용
 if 'bedrock_model' not in st.session_state:
-    st.session_state.bedrock_model = BedrockModel(
-        model_id=BEDROCK_MODEL_ID,
-        region_name=AWS_REGION
-    )
+    st.session_state.bedrock_model = create_agent_model()
 
 # AI 에이전트 시스템 프롬프트 초기화
 # 이 프롬프트는 AI가 어떻게 응답해야 하는지 정의함
@@ -1124,8 +1115,8 @@ with col1:
 
     # 인기 검색어 버튼
     st.markdown("**빠른 검색:**")
-    quick_cols = st.columns(6)
-    quick_stocks = ["삼성전자", "NVDA", "TSLA", "SK하이닉스", "애플", "네이버"]
+    quick_stocks = ["삼성전자", "NVDA", "TSLA", "SK하이닉스", "애플", "네이버", "알파벳A"]
+    quick_cols = st.columns(len(quick_stocks))
     for i, stock in enumerate(quick_stocks):
         with quick_cols[i]:
             if st.button(stock, key=f"quick_{stock}", use_container_width=True):
@@ -1548,11 +1539,8 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                                 for attempt in range(max_retries):
                                     try:
                                         if attempt > 0:
-                                            # Bedrock 모델 재초기화
-                                            st.session_state.bedrock_model = BedrockModel(
-                                                model_id=BEDROCK_MODEL_ID,
-                                                region_name=AWS_REGION
-                                            )
+                                            # AI 모델 재초기화
+                                            st.session_state.bedrock_model = create_agent_model()
                                             forecast_agent = Agent(
                                                 model=st.session_state.bedrock_model,
                                                 tools=[],
@@ -2494,12 +2482,9 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
 
                 for attempt in range(max_retries):
                     try:
-                        # Bedrock 모델 재초기화 (연결 문제 방지)
+                        # AI 모델 재초기화 (연결 문제 방지)
                         if attempt > 0:
-                            st.session_state.bedrock_model = BedrockModel(
-                                model_id=BEDROCK_MODEL_ID,
-                                region_name=AWS_REGION
-                            )
+                            st.session_state.bedrock_model = create_agent_model()
                             # 에이전트 재생성 (도구 없이 - 속도 향상)
                             retry_agent = Agent(
                                 model=st.session_state.bedrock_model,

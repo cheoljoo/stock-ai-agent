@@ -1,0 +1,23 @@
+[Unit]
+Description=Stock AI Agent Dashboard (Streamlit)
+After=network.target
+
+[Service]
+Type=simple
+User=cheoljoo
+WorkingDirectory=/home/cheoljoo/code/stock-ai-agent
+Environment=AI_PROVIDER=gemini
+ExecStart=/home/cheoljoo/code/stock-ai-agent/.venv/bin/streamlit run \
+    app.py \
+    --server.address 0.0.0.0 \
+    --server.port 8504 \
+    --server.headless true \
+    --server.baseUrlPath /stock_ai_agent \
+    --browser.gatherUsageStats false
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/cheoljoo/code/stock-ai-agent/dashboard.log
+StandardError=append:/home/cheoljoo/code/stock-ai-agent/dashboard.log
+
+[Install]
+WantedBy=multi-user.target

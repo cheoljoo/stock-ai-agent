@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
     "feedparser>=6.0.14",
+    "openai>=3.3.1",
     "plotly>=6.9.0",
     "prophet>=1.4.0",
     "python-dotenv>=1.2.3",

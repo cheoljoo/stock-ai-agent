@@ -408,9 +408,13 @@ def get_theme_css(is_dark: bool) -> str:
 # 상태를 유지하려면 session_state를 사용해야 함
 # =============================================================================
 
-# AI 모델 초기화 (한 번만 생성) - 로컬 계정 기반 agy CLI 사용
+# AI 제공자 선택 상태 초기화 (gemini/claude: 로컬 계정 agy CLI, openrouter: API 직접 호출)
+if 'ai_provider' not in st.session_state:
+    st.session_state.ai_provider = os.environ.get('AI_PROVIDER', 'openrouter')
+
+# AI 모델 초기화 (한 번만 생성)
 if 'bedrock_model' not in st.session_state:
-    st.session_state.bedrock_model = create_agent_model()
+    st.session_state.bedrock_model = create_agent_model(provider=st.session_state.ai_provider)
 
 # AI 에이전트 시스템 프롬프트 초기화
 # 이 프롬프트는 AI가 어떻게 응답해야 하는지 정의함
@@ -617,6 +621,24 @@ with st.sidebar:
         if st.button("🌙" if not st.session_state.dark_mode else "☀️", key="theme_toggle"):
             st.session_state.dark_mode = not st.session_state.dark_mode
             st.rerun()
+
+    st.divider()
+
+    # -------------------------------------------------------------------------
+    # AI 제공자 선택 (gemini/claude: 로컬 계정 agy CLI 무료, openrouter: API 직접 호출)
+    # -------------------------------------------------------------------------
+    AI_PROVIDER_OPTIONS = ["openrouter", "gemini", "claude"]
+    selected_provider = st.selectbox(
+        "🤖 AI 모델",
+        AI_PROVIDER_OPTIONS,
+        index=AI_PROVIDER_OPTIONS.index(st.session_state.ai_provider)
+        if st.session_state.ai_provider in AI_PROVIDER_OPTIONS else 0,
+        help="gemini/claude는 로컬 계정 구독(agy CLI, 과금 없음), openrouter는 무료 모델을 사용합니다.",
+    )
+    if selected_provider != st.session_state.ai_provider:
+        st.session_state.ai_provider = selected_provider
+        st.session_state.bedrock_model = create_agent_model(provider=selected_provider)
+        st.rerun()
 
     st.divider()
 
@@ -1540,7 +1562,7 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                                     try:
                                         if attempt > 0:
                                             # AI 모델 재초기화
-                                            st.session_state.bedrock_model = create_agent_model()
+                                            st.session_state.bedrock_model = create_agent_model(provider=st.session_state.ai_provider)
                                             forecast_agent = Agent(
                                                 model=st.session_state.bedrock_model,
                                                 tools=[],
@@ -2484,7 +2506,7 @@ if (analyze_button or st.session_state.get('auto_analyze')) and current_input:
                     try:
                         # AI 모델 재초기화 (연결 문제 방지)
                         if attempt > 0:
-                            st.session_state.bedrock_model = create_agent_model()
+                            st.session_state.bedrock_model = create_agent_model(provider=st.session_state.ai_provider)
                             # 에이전트 재생성 (도구 없이 - 속도 향상)
                             retry_agent = Agent(
                                 model=st.session_state.bedrock_model,

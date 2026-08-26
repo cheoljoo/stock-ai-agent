@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI 백엔드 모듈 - AWS Bedrock 대신 로컬 계정 기반 CLI(agy)로 AI 모델을 호출한다.
+AI 백엔드 모듈 - AWS Bedrock 대신 로컬 계정 기반 CLI(agy) 또는 OpenRouter API로
+AI 모델을 호출한다.
 
 기존에는 AWS Bedrock(Claude Opus)를 API 키/과금 기반으로 호출했지만,
 이 모듈은 로컬에 로그인된 Google/Anthropic 계정 구독 한도 내에서
 `agy` CLI(gemini code 계열, Gemini/Claude 모델을 모두 지원)를 서브프로세스로
-호출하는 strands Model 구현체를 제공한다.
+호출하는 strands Model 구현체를 기본으로 제공한다. 필요 시 OpenRouter API 키로
+직접 호출하는 방식도 선택할 수 있다(과금 발생).
 
 사용법 (app.py / stock_agent.py 공통):
     from ai_backend import create_agent_model
@@ -14,11 +16,13 @@ AI 백엔드 모듈 - AWS Bedrock 대신 로컬 계정 기반 CLI(agy)로 AI 모
     agent = Agent(model=model, tools=[...], system_prompt="...")
 
 제공자(provider) 전환:
-    환경변수 AI_PROVIDER 로 "gemini"(기본값) 또는 "claude" 선택.
-    환경변수 AI_MODEL_ID 로 agy가 인식하는 정확한 모델명을 직접 지정 가능
-    (예: gemini-3.1-pro-high, claude-sonnet-4-6). agy는 이미 두 제공자를
-    모두 지원하므로, Claude를 추가할 때 별도 CLI 연동 코드 없이
-    AI_PROVIDER=claude 로만 전환하면 된다.
+    환경변수 AI_PROVIDER 로 "gemini"(기본값) | "claude" | "openrouter" 선택.
+    - gemini/claude: 로컬 계정 구독 기반 agy CLI 호출(과금 없음).
+      AI_MODEL_ID 로 agy가 인식하는 정확한 모델명 직접 지정 가능
+      (예: gemini-3.1-pro-high, claude-sonnet-4-6).
+    - openrouter: OpenRouter API를 직접 호출(사용량만큼 과금).
+      OPENROUTER_API_KEY(.env) 필요. AI_MODEL_ID 로 OpenRouter 모델명 지정
+      가능(예: anthropic/claude-sonnet-4.5, openai/gpt-4o-mini).
 """
 
 import asyncio
@@ -28,13 +32,19 @@ import subprocess
 from collections.abc import AsyncGenerator
 from typing import Any, TypeVar
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
 from strands.models.model import BaseModelConfig, Model
+from strands.models.openai import OpenAIModel
 from strands.types.content import Messages
 from strands.types.streaming import StreamEvent
 from strands.types.tools import ToolChoice, ToolSpec
 
+load_dotenv()
+
 T = TypeVar("T", bound=BaseModel)
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # systemd 서비스 등 로그인 셸 PATH를 상속받지 못하는 환경에서도 agy를 찾기 위한 후보 경로
 _AGY_FALLBACK_PATHS = [
@@ -66,13 +76,19 @@ def _resolve_agy_path() -> str:
         "PATH에 agy가 있는지 확인하세요."
     )
 
-# 제공자별 기본 모델 (agy models 명령으로 조회 가능한 이름)
+# 제공자별 기본 모델
+# - gemini/claude: agy models 명령으로 조회 가능한 이름
+# - openrouter: https://openrouter.ai/models 에서 조회 가능한 이름
 PROVIDER_DEFAULT_MODELS = {
     "gemini": "gemini-3.1-pro-high",
     "claude": "claude-sonnet-4-6",
+    "openrouter": "minimax/minimax-m3:free",  # OpenRouter 무료 모델 (과금 없음)
 }
 
-DEFAULT_PROVIDER = "gemini"
+# agy CLI(로컬 계정 구독) 기반 제공자. 이 외(openrouter 등)는 별도 API 호출 방식.
+AGY_PROVIDERS = {"gemini", "claude"}
+
+DEFAULT_PROVIDER = "openrouter"
 DEFAULT_TIMEOUT_SECONDS = 300
 
 
@@ -173,12 +189,13 @@ class AgyCliModel(Model):
         yield  # pragma: no cover - AsyncGenerator 형태를 만족시키기 위한 도달 불가 코드
 
 
-def create_agent_model(provider: str | None = None, model_id: str | None = None) -> AgyCliModel:
-    """환경변수(AI_PROVIDER, AI_MODEL_ID) 또는 인자를 기반으로 AgyCliModel을 생성한다.
+def create_agent_model(provider: str | None = None, model_id: str | None = None) -> Model:
+    """환경변수(AI_PROVIDER, AI_MODEL_ID) 또는 인자를 기반으로 AI 모델을 생성한다.
 
     Args:
-        provider: "gemini" 또는 "claude". 생략 시 AI_PROVIDER 환경변수(기본값 gemini) 사용.
-        model_id: agy가 인식하는 정확한 모델명. 생략 시 AI_MODEL_ID 환경변수 또는
+        provider: "gemini" | "claude" | "openrouter". 생략 시 AI_PROVIDER 환경변수
+            (기본값 gemini) 사용.
+        model_id: 제공자가 인식하는 정확한 모델명. 생략 시 AI_MODEL_ID 환경변수 또는
             provider별 기본 모델을 사용한다.
     """
     resolved_provider = (provider or os.environ.get("AI_PROVIDER", DEFAULT_PROVIDER)).lower()
@@ -188,6 +205,22 @@ def create_agent_model(provider: str | None = None, model_id: str | None = None)
         or PROVIDER_DEFAULT_MODELS.get(resolved_provider, PROVIDER_DEFAULT_MODELS[DEFAULT_PROVIDER])
     )
 
-    timeout = int(os.environ.get("AI_CLI_TIMEOUT", DEFAULT_TIMEOUT_SECONDS))
+    if resolved_provider == "openrouter":
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "OPENROUTER_API_KEY가 설정되어 있지 않습니다. .env 파일에 추가하세요."
+            )
+        return OpenAIModel(
+            client_args={"base_url": OPENROUTER_BASE_URL, "api_key": api_key},
+            model_id=resolved_model_id,
+        )
 
+    if resolved_provider not in AGY_PROVIDERS:
+        raise RuntimeError(
+            f"알 수 없는 AI_PROVIDER=<{resolved_provider}>입니다. "
+            f"gemini | claude | openrouter 중 하나를 사용하세요."
+        )
+
+    timeout = int(os.environ.get("AI_CLI_TIMEOUT", DEFAULT_TIMEOUT_SECONDS))
     return AgyCliModel(model_id=resolved_model_id, timeout=timeout)

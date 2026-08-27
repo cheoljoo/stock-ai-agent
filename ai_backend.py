@@ -214,6 +214,11 @@ def create_agent_model(provider: str | None = None, model_id: str | None = None)
         return OpenAIModel(
             client_args={"base_url": OPENROUTER_BASE_URL, "api_key": api_key},
             model_id=resolved_model_id,
+            # 비스트리밍 호출로 고정: 스트리밍 응답을 쓰면 프로세스 종료 시
+            # httpx/httpcore 비동기 제너레이터 정리 과정에서 무해하지만 시끄러운
+            # "GeneratorExit"/"generator didn't stop after athrow()" 트레이스백이
+            # stderr에 출력됨.
+            stream=False,
         )
 
     if resolved_provider not in AGY_PROVIDERS:

@@ -1,4 +1,5 @@
 strands-agents
+openai
 yfinance
 python-dotenv
 feedparser
@@ -6,3 +7,4 @@ requests
 streamlit
 plotly
 prophet
+stock-sim @ git+https://github.com/cheoljoo/stock-sim-template.git@v0.2.0

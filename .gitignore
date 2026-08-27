@@ -8,3 +8,4 @@ venv/
 .DS_Store
 *.log
 *.db
+.telegram_bot_offset

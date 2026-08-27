@@ -2,7 +2,7 @@
 name = "stock-ai-agent"
 version = "0.1.0"
 description = "Add your description here"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "feedparser>=6.0.14",
     "openai>=3.3.1",
@@ -10,7 +10,11 @@ dependencies = [
     "prophet>=1.4.0",
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
+    "stock-sim",
     "strands-agents>=1.53.0",
     "streamlit>=1.62.0",
     "yfinance>=1.6.0",
 ]
+
+[tool.uv.sources]
+stock-sim = { git = "https://github.com/cheoljoo/stock-sim-template.git", rev = "v0.3.0" }

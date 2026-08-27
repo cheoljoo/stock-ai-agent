@@ -1,0 +1,16 @@
+[Unit]
+Description=Stock AI Agent Telegram Bot (approval-gated)
+After=network.target
+
+[Service]
+Type=simple
+User=cheoljoo
+WorkingDirectory=/home/cheoljoo/code/stock-ai-agent
+ExecStart=/home/cheoljoo/code/stock-ai-agent/.venv/bin/python telegram_bot.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/cheoljoo/code/stock-ai-agent/telegram_bot.log
+StandardError=append:/home/cheoljoo/code/stock-ai-agent/telegram_bot.log
+
+[Install]
+WantedBy=multi-user.target

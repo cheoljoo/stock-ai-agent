@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily random stock AI analysis -> Telegram
+After=network.target
+
+[Service]
+Type=oneshot
+User=cheoljoo
+WorkingDirectory=/home/cheoljoo/code/stock-ai-agent
+ExecStart=/home/cheoljoo/code/stock-ai-agent/.venv/bin/python daily_random_analysis.py
+StandardOutput=append:/home/cheoljoo/code/stock-ai-agent/daily_random_analysis.log
+StandardError=append:/home/cheoljoo/code/stock-ai-agent/daily_random_analysis.log

@@ -17,4 +17,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-stock-sim = { git = "https://github.com/cheoljoo/stock-sim-template.git", rev = "v0.3.0" }
+stock-sim = { git = "https://github.com/cheoljoo/stock-sim-template.git", rev = "v0.4.0" }

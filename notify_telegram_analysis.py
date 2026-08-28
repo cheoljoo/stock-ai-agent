@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""회사명에 대한 AI 종합 분석 결과를 Telegram으로 전송한다.
+"""회사명에 대한 AI 종합 분석 결과를 Telegram과 KakaoTalk(나에게 보내기)으로 전송한다.
 
 사용법:
     uv run python notify_telegram_analysis.py "알파벳A"
@@ -11,6 +11,7 @@ import os
 import sys
 
 from strands import Agent
+from stock_sim.kakao import KakaoNotifier
 from stock_sim.telegram import ChatAllowlist, TelegramNotifier
 
 from ai_backend import create_agent_model
@@ -51,7 +52,9 @@ def build_analysis(company_name: str) -> str:
 
 
 def broadcast_analysis(company_name: str, title_prefix: str = "📊") -> None:
-    """`company_name`의 AI 종합 분석을 만들어 승인된 사용자 전원에게 Telegram으로 보낸다."""
+    """`company_name`의 AI 종합 분석을 만들어 Telegram(승인된 사용자 전원)과
+    KakaoTalk(나에게 보내기)으로 보낸다.
+    """
     analysis_text = build_analysis(company_name)
     message = f"{title_prefix} {company_name} AI 종합 분석\n\n{analysis_text}"
 
@@ -60,6 +63,15 @@ def broadcast_analysis(company_name: str, title_prefix: str = "📊") -> None:
     notifier = TelegramNotifier(bot_token, ",".join(approved_chat_ids))
     notifier.send_message(message, parse_mode="")
     print(f"Telegram 전송 완료 (수신자: {len(approved_chat_ids)}명)")
+
+    if os.environ.get("KAKAO_REST_API_KEY") and os.environ.get("KAKAO_REFRESH_TOKEN"):
+        try:
+            KakaoNotifier.from_env().send_message(message)
+            print("Kakao 전송 완료")
+        except Exception as e:
+            print(f"Kakao 전송 실패: {e}")
+    else:
+        print("Kakao 설정이 없어 건너뜁니다 (KAKAO_REST_API_KEY/KAKAO_REFRESH_TOKEN 미설정)")
 
 
 def main() -> None:
